@@ -1,16 +1,18 @@
-"""Unit tests for the LLM-call-with-heuristic-fallback wrappers in core/pipeline.py.
+"""Unit tests for the LLM-call-with-fallback wrappers in core/pipeline.py.
 
 Uses a fake stand-in for LLMClient so no network call or API key is needed, and so the fallback
-path (bad JSON, or the call itself raising) can be exercised deterministically.
+path (bad JSON, wrong shape, or the call itself raising) can be exercised deterministically.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PIL import Image
 
 from core.llm.client import Metrics
-from core.pipeline import _action_from_frame, _intent_from_segment
+from core.models.tokens import ActionToken, IntentToken
+from core.pipeline import _action_from_frame, _cross_check_resolution, _extract_intents_from_transcript
 
 
 def _write_test_frame(path: Path, size: tuple[int, int] = (32, 24)) -> Path:
@@ -44,66 +46,200 @@ def _openai_response(content: str) -> dict:
     return {"choices": [{"message": {"content": content}}]}
 
 
-SEGMENT = {"id": 1, "start": 0.0, "end": 3.0, "text": "We open the master sheet."}
+SEGMENTS = [
+    {"id": 0, "start": 0.0, "end": 3.0, "text": "We open the reference sheet."},
+    {"id": 1, "start": 3.0, "end": 6.0, "text": "Then it saves automatically."},
+]
 
 
-def test_intent_from_segment_uses_llm_result_on_success():
+def _segment_item(**overrides):
+    item = {
+        "segment_index": 0,
+        "intent": "open the reference sheet",
+        "verb": "open",
+        "obj": "the reference sheet",
+        "confidence": 0.9,
+        "is_vague": False,
+        "entities_referenced": [],
+        "selection_criteria": None,
+        "claimed_outcome": None,
+    }
+    item.update(overrides)
+    return item
+
+
+# --- _extract_intents_from_transcript ---------------------------------------
+
+def test_extract_intents_uses_llm_result_on_success():
     good = _openai_response(
-        '{"intent": "Open the master sheet", "verb": "open", "obj": "master sheet", '
-        '"confidence": 0.9, "is_vague": false}'
+        json.dumps(
+            {
+                "segments": [
+                    _segment_item(segment_index=0, intent="open the reference sheet"),
+                    _segment_item(segment_index=1, intent="save", claimed_outcome="it saves automatically"),
+                ]
+            }
+        )
     )
     client = _FakeClient(chat_response=good)
 
-    token = _intent_from_segment(client, SEGMENT)
+    tokens = _extract_intents_from_transcript(client, SEGMENTS)
 
-    assert token.intent == "Open the master sheet"
-    assert token.verb == "open"
+    assert len(tokens) == 2
+    assert tokens[0].intent == "open the reference sheet"
+    assert tokens[1].claimed_outcome == "it saves automatically"
     assert client.metrics.failures == []
 
 
-def test_intent_from_segment_falls_back_on_call_exception():
+def test_extract_intents_falls_back_to_heuristic_on_call_exception():
     client = _FakeClient(chat_response=RuntimeError("connection reset"))
 
-    token = _intent_from_segment(client, SEGMENT)
+    tokens = _extract_intents_from_transcript(client, SEGMENTS)
 
-    # heuristic fallback: raw text becomes the intent, no vague keywords present
-    assert token.intent == SEGMENT["text"]
-    assert token.is_vague is False
+    assert len(tokens) == 2
+    assert tokens[0].intent == SEGMENTS[0]["text"]
+    assert tokens[1].intent == SEGMENTS[1]["text"]
     assert len(client.metrics.failures) == 1
-    assert client.metrics.failures[0]["stage"] == "intent_extraction"
+    assert client.metrics.failures[0]["stage"] == "transcript_extraction"
 
 
-def test_intent_from_segment_falls_back_on_malformed_json():
+def test_extract_intents_falls_back_to_heuristic_on_malformed_json():
     client = _FakeClient(chat_response=_openai_response("not json"))
 
-    token = _intent_from_segment(client, SEGMENT)
+    tokens = _extract_intents_from_transcript(client, SEGMENTS)
 
-    assert token.intent == SEGMENT["text"]
+    assert len(tokens) == 2
     assert len(client.metrics.failures) == 1
 
 
-def test_intent_from_segment_skips_call_for_empty_text():
+def test_extract_intents_falls_back_to_heuristic_on_wrong_length():
+    # Only one item back for two input segments -- whole batch must fall back, not partial.
+    good = _openai_response(json.dumps({"segments": [_segment_item()]}))
+    client = _FakeClient(chat_response=good)
+
+    tokens = _extract_intents_from_transcript(client, SEGMENTS)
+
+    assert len(tokens) == 2
+    assert tokens[0].intent == SEGMENTS[0]["text"]
+    assert len(client.metrics.failures) == 1
+
+
+def test_extract_intents_returns_empty_list_for_no_segments():
     client = _FakeClient(chat_response=RuntimeError("should never be called"))
-    seg = {"id": 2, "start": 5.0, "end": 6.0, "text": "   "}
+    tokens = _extract_intents_from_transcript(client, [])
+    assert tokens == []
+    assert client.metrics.failures == []
 
-    token = _intent_from_segment(client, seg)
 
-    assert token.intent == "   "
-    assert client.metrics.failures == []  # never attempted the call, so no failure recorded
+# --- _cross_check_resolution -------------------------------------------------
 
+def _intent_with(**overrides) -> IntentToken:
+    base = dict(
+        intent_id="intent_0",
+        t_s=0.0,
+        span_s=3.0,
+        raw_text="raw text",
+        intent="an intent",
+        confidence=0.8,
+        is_vague=True,
+        entities_referenced=[],
+        selection_criteria=None,
+        claimed_outcome=None,
+    )
+    base.update(overrides)
+    return IntentToken(**base)
+
+
+def _action_with(**overrides) -> ActionToken:
+    base = dict(
+        action_id="action_0000",
+        t_s=1.0,
+        frame_path=Path("frame_0000.png"),
+        action_type="view",
+        target=None,
+        details="",
+        app=None,
+        confidence=0.9,
+    )
+    base.update(overrides)
+    return ActionToken(**base)
+
+
+def test_cross_check_uses_llm_result_on_success():
+    intents = [_intent_with(claimed_outcome="it saves automatically")]
+    actions = [_action_with()]
+    good = _openai_response(
+        json.dumps(
+            {
+                "unresolved_entities": [],
+                "unconfirmed_claims": [
+                    {"intent_id": "intent_0", "claimed_outcome": "it saves automatically", "reason": "no save action observed"}
+                ],
+            }
+        )
+    )
+    client = _FakeClient(chat_response=good)
+
+    unresolved, unconfirmed = _cross_check_resolution(client, intents, actions)
+
+    assert unresolved == []
+    assert len(unconfirmed) == 1
+    assert unconfirmed[0].intent_id == "intent_0"
+    assert client.metrics.failures == []
+
+
+def test_cross_check_falls_back_to_empty_on_call_exception():
+    intents = [_intent_with(claimed_outcome="it saves automatically")]
+    actions = [_action_with()]
+    client = _FakeClient(chat_response=RuntimeError("rate limited"))
+
+    unresolved, unconfirmed = _cross_check_resolution(client, intents, actions)
+
+    assert unresolved == []
+    assert unconfirmed == []
+    assert len(client.metrics.failures) == 1
+    assert client.metrics.failures[0]["stage"] == "cross_check"
+
+
+def test_cross_check_falls_back_to_empty_on_malformed_json():
+    intents = [_intent_with(claimed_outcome="it saves automatically")]
+    actions = [_action_with()]
+    client = _FakeClient(chat_response=_openai_response("not json"))
+
+    unresolved, unconfirmed = _cross_check_resolution(client, intents, actions)
+
+    assert unresolved == []
+    assert unconfirmed == []
+    assert len(client.metrics.failures) == 1
+
+
+def test_cross_check_skips_call_when_nothing_to_check():
+    # No intent has entities/selection_criteria/claimed_outcome set -- nothing worth cross-checking.
+    intents = [_intent_with()]
+    actions = [_action_with()]
+    client = _FakeClient(chat_response=RuntimeError("should never be called"))
+
+    unresolved, unconfirmed = _cross_check_resolution(client, intents, actions)
+
+    assert unresolved == []
+    assert unconfirmed == []
+    assert client.metrics.failures == []
+
+
+# --- _action_from_frame (unchanged behavior, still exercised here) ----------
 
 def test_action_from_frame_uses_llm_result_on_success(tmp_path):
     frame = _write_test_frame(tmp_path / "frame_0000.png")
     good = _openai_response(
-        '{"action_type": "filter", "target": "Status column", "details": "User applied a filter.", '
-        '"app": "Excel", "confidence": 0.6}'
+        '{"action_type": "filter", "target": "a specific column", "details": "User applied a filter.", '
+        '"app": "a spreadsheet application", "confidence": 0.6}'
     )
     client = _FakeClient(vision_response=good)
 
     token = _action_from_frame(client, 0, frame, 0.0)
 
     assert token.action_type == "filter"
-    assert token.target == "Status column"
+    assert token.target == "a specific column"
     assert client.metrics.failures == []
 
 

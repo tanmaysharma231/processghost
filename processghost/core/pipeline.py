@@ -1,18 +1,24 @@
 """End-to-end pipeline orchestrator.
 
-Intent extraction and action description are backed by real OpenAI chat/vision calls (see
-core/llm/prompts.py and core/llm/parsing.py). Each has a heuristic fallback used only when the live
-call fails or returns something that doesn't parse -- every fallback used is recorded on the run's
-metrics (Metrics.record_failure) rather than happening silently, so a run can always be audited for
-where it degraded to the heuristic path. See Process_ghost/docs/08-target-pipeline-spec.md for the
-per-item failure-handling rationale this follows.
+Intent extraction, action description, and cross-checking are backed by real OpenAI chat/vision
+calls (see core/llm/prompts.py and core/llm/parsing.py). Each has a fallback used only when the
+live call fails or returns something that doesn't parse -- every fallback used is recorded on the
+run's metrics (Metrics.record_failure) rather than happening silently, so a run can always be
+audited for where it degraded. See Process_ghost/docs/08-target-pipeline-spec.md for the
+failure-handling rationale this follows.
+
+Intent extraction and cross-checking are each ONE call per run (not one per transcript segment or
+one per intent-action pair) -- giving the model the whole transcript, or the whole set of extracted
+entities/claims plus a compact summary of observed actions, at once lets it do cross-referencing
+across the entire recording that a narrower per-fragment call structurally cannot do, at lower
+total cost than many small calls. See Process_ghost's plan history for the full reasoning.
 """
 from __future__ import annotations
 
 import shutil
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 from core import config
 from core.align.aligner import build_alignments
@@ -20,10 +26,29 @@ from core.io import storage, video
 from core.io.images import frame_to_data_uri
 from core.llm.client import LLMClient, Metrics, persist_metrics, persist_run_json
 from core.llm import prompts
-from core.llm.parsing import extract_chat_content, parse_action_response, parse_intent_response
-from core.models.tokens import ActionToken, IntentToken, RunArtifacts, TranscriptSegment
+from core.llm.parsing import (
+    extract_chat_content,
+    parse_action_response,
+    parse_cross_check_response,
+    parse_transcript_extraction_response,
+)
+from core.models.tokens import (
+    ActionToken,
+    IntentToken,
+    RunArtifacts,
+    TranscriptSegment,
+    UnconfirmedClaimFinding,
+    UnresolvedEntityFinding,
+)
 from core.rules import engine
-from core.rules import r_contradiction, r_silent_step, r_teleportation, r_unexplained, r_vague_intent
+from core.rules import (
+    r_contradiction,
+    r_silent_step,
+    r_teleportation,
+    r_unconfirmed_outcome,
+    r_unexplained,
+    r_unresolved_reference,
+)
 from report import render
 
 
@@ -44,26 +69,37 @@ def _intent_heuristic(seg: dict) -> IntentToken:
     )
 
 
-def _intent_from_segment(client: LLMClient, seg: dict) -> IntentToken:
-    """Extract the intent from one transcript segment via a real chat call."""
-    text = seg.get("text", "")
-    if not text.strip():
-        return _intent_heuristic(seg)
+def _extract_intents_from_transcript(client: LLMClient, segments_raw: list[dict]) -> List[IntentToken]:
+    """Extract intents (and entities/selection-criteria/claimed-outcomes) for the WHOLE transcript
+    in a single chat call. On any failure -- the call itself, a wrong-length array, a field that
+    doesn't validate -- falls back to the keyword heuristic for every segment in the batch, and
+    records exactly one failure on the run's metrics."""
+    if not segments_raw:
+        return []
     try:
+        numbered = [
+            {
+                "segment_index": i,
+                "start_s": seg.get("start"),
+                "end_s": seg.get("end"),
+                "text": seg.get("text", ""),
+            }
+            for i, seg in enumerate(segments_raw)
+        ]
         response = client.chat(
             [
-                {"role": "system", "content": prompts.INTENT_EXTRACTION_SYSTEM},
-                {"role": "user", "content": text},
+                {"role": "system", "content": prompts.TRANSCRIPT_EXTRACTION_SYSTEM},
+                {"role": "user", "content": str(numbered)},
             ],
             response_format={"type": "json_object"},
         )
         content = extract_chat_content(response)
-        return parse_intent_response(content, seg=seg)
+        return parse_transcript_extraction_response(content, segments_raw)
     except Exception as exc:  # noqa: BLE001 - any failure here must degrade, not fail the run
         client.metrics.record_failure(
-            "intent_extraction", str(exc), meta={"segment_start": seg.get("start")}
+            "transcript_extraction", str(exc), meta={"segment_count": len(segments_raw)}
         )
-        return _intent_heuristic(seg)
+        return [_intent_heuristic(seg) for seg in segments_raw]
 
 
 def _action_heuristic(idx: int, frame_path: Path, t_s: float) -> ActionToken:
@@ -108,6 +144,59 @@ def _action_from_frame(client: LLMClient, idx: int, frame_path: Path, t_s: float
         return _action_heuristic(idx, frame_path, t_s)
 
 
+def _cross_check_resolution(
+    client: LLMClient, intents: List[IntentToken], actions: List[ActionToken]
+) -> Tuple[List[UnresolvedEntityFinding], List[UnconfirmedClaimFinding]]:
+    """One chat call, after both intents and actions are known: given compact text summaries of
+    what was said (entities referenced, selection criteria, claimed outcomes) and what was
+    observed (action type/target/details per sampled frame), find which entities are still
+    unresolved and which claims are still unconfirmed across the WHOLE run. On any failure,
+    records one failure on the run's metrics and returns two empty lists -- the two rules that
+    consume this simply produce no findings for the run rather than crashing it."""
+    narration_items = [
+        {
+            "intent_id": i.intent_id,
+            "entities_referenced": [e.model_dump() for e in i.entities_referenced],
+            "selection_criteria": i.selection_criteria,
+            "claimed_outcome": i.claimed_outcome,
+        }
+        for i in intents
+        if i.entities_referenced or i.selection_criteria or i.claimed_outcome
+    ]
+    observed_actions = [
+        {
+            "action_id": a.action_id,
+            "t_s": a.t_s,
+            "action_type": a.action_type,
+            "target": a.target,
+            "details": a.details,
+        }
+        for a in actions
+    ]
+
+    if not narration_items:
+        return [], []
+
+    try:
+        response = client.chat(
+            [
+                {"role": "system", "content": prompts.CROSS_CHECK_SYSTEM},
+                {
+                    "role": "user",
+                    "content": str({"narration_items": narration_items, "observed_actions": observed_actions}),
+                },
+            ],
+            response_format={"type": "json_object"},
+        )
+        content = extract_chat_content(response)
+        return parse_cross_check_response(content)
+    except Exception as exc:  # noqa: BLE001 - any failure here must degrade, not fail the run
+        client.metrics.record_failure(
+            "cross_check", str(exc), meta={"intent_count": len(intents), "action_count": len(actions)}
+        )
+        return [], []
+
+
 def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERVAL_S) -> RunArtifacts:
     t0 = time.time()
     metrics = Metrics()
@@ -133,7 +222,8 @@ def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERV
         for seg in segments_raw
     ]
 
-    intents: List[IntentToken] = [_intent_from_segment(client, seg) for seg in segments_raw]
+    # One call for the whole transcript (not one per segment) -- see module docstring.
+    intents: List[IntentToken] = _extract_intents_from_transcript(client, segments_raw)
 
     # Frame sampling: extract at a fixed interval, then cap how many of those frames actually get
     # a vision call (cost/latency guard) by evenly subsampling. Frames outside the vision budget
@@ -155,6 +245,9 @@ def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERV
 
     alignments = build_alignments(actions, intents)
 
+    # One call, after both intents and actions are known -- see module docstring.
+    unresolved_entities, unconfirmed_claims = _cross_check_resolution(client, intents, actions)
+
     artifacts = RunArtifacts(
         run_id=run_dir.name,
         video_path=local_video,
@@ -164,9 +257,17 @@ def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERV
         intents=intents,
         actions=actions,
         alignments=alignments,
+        unresolved_entities=unresolved_entities,
+        unconfirmed_claims=unconfirmed_claims,
     )
 
-    rules = [r_unexplained.rule, r_silent_step.rule, r_vague_intent.rule, r_teleportation.rule]
+    rules = [
+        r_unexplained.rule,
+        r_silent_step.rule,
+        r_unresolved_reference.rule,
+        r_unconfirmed_outcome.rule,
+        r_teleportation.rule,
+    ]
     if config.ENABLE_CONTRADICTION:
         rules.append(r_contradiction.rule)
 

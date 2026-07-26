@@ -14,6 +14,12 @@ class TranscriptSegment(BaseModel):
     speaker: Optional[str] = None
 
 
+class EntityReference(BaseModel):
+    raw_mention: str
+    entity_role: str  # location_or_container | target_field | data_value | condition_or_status | actor | other
+    named_specifically: bool
+
+
 class IntentToken(BaseModel):
     intent_id: str
     t_s: float
@@ -24,6 +30,9 @@ class IntentToken(BaseModel):
     obj: Optional[str] = None
     confidence: float = 0.0
     is_vague: bool = False
+    entities_referenced: List[EntityReference] = Field(default_factory=list)
+    selection_criteria: Optional[str] = None
+    claimed_outcome: Optional[str] = None
 
 
 class ActionToken(BaseModel):
@@ -68,6 +77,18 @@ class Dissonance(BaseModel):
     rule_version: str = "0.1"
 
 
+class UnresolvedEntityFinding(BaseModel):
+    intent_id: str
+    raw_mention: str
+    reason: str
+
+
+class UnconfirmedClaimFinding(BaseModel):
+    intent_id: str
+    claimed_outcome: str
+    reason: str
+
+
 class RunArtifacts(BaseModel):
     run_id: str
     video_path: Path
@@ -77,6 +98,8 @@ class RunArtifacts(BaseModel):
     intents: List[IntentToken] = Field(default_factory=list)
     actions: List[ActionToken] = Field(default_factory=list)
     alignments: List[Alignment] = Field(default_factory=list)
+    unresolved_entities: List[UnresolvedEntityFinding] = Field(default_factory=list)
+    unconfirmed_claims: List[UnconfirmedClaimFinding] = Field(default_factory=list)
     dissonances: List[Dissonance] = Field(default_factory=list)
     report_md: Optional[Path] = None
     report_html: Optional[Path] = None
