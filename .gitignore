@@ -1,0 +1,32 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+!*.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# processghost runtime output (regenerated per run, not source)
+processghost/runs/*
+!processghost/runs/.gitkeep
+processghost/logs/*.log
+processghost/logs/run-metrics.csv
+
+# Node / Next.js (process-ghost-incredible-node-qh4q-main)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

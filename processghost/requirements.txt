@@ -1,0 +1,11 @@
+openai>=1.13.0
+streamlit>=1.31.0
+pydantic>=2.5.0
+langgraph>=0.0.30
+ffmpeg-python>=0.2.0
+moviepy>=1.0.3
+pillow>=10.0.0
+numpy>=1.26.0
+tqdm>=4.66.0
+python-dotenv>=1.0.0
+tenacity>=8.2.0

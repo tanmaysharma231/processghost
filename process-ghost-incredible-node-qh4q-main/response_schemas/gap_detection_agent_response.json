@@ -1,0 +1,46 @@
+{
+  "agent_name": "Gap Detection Agent",
+  "agent_id": "69ec5b3307db2da1f5e0c20c",
+  "description": "Reads raw transcript and step list plus Judge findings on loop iterations. Identifies expertise blindness \u2014 skipped prerequisites, vague references, implied knowledge. Outputs gap details with bridging questions and timestamp windows.",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "result": {
+      "gaps": [
+        {
+          "gap_id": "number",
+          "related_step": "number",
+          "gap_type": "string",
+          "description": "string",
+          "bridging_question": "string",
+          "timestamp_start": "string",
+          "timestamp_end": "string",
+          "severity": "string"
+        }
+      ],
+      "total_gaps_found": "number",
+      "expertise_blindness_score": "string",
+      "analysis_notes": "string"
+    }
+  },
+  "example_response": {
+    "result": {
+      "gaps": [
+        {
+          "gap_id": 0,
+          "related_step": 0,
+          "gap_type": "sample string",
+          "description": "sample string",
+          "bridging_question": "sample string",
+          "timestamp_start": "sample string",
+          "timestamp_end": "sample string",
+          "severity": "sample string"
+        }
+      ],
+      "total_gaps_found": 0,
+      "expertise_blindness_score": "sample string",
+      "analysis_notes": "sample string"
+    }
+  }
+}

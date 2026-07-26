@@ -1,0 +1,35 @@
+{
+  "name": "ProcessGhost - AI Process Documentation Generator",
+  "description": "6-agent sequential pipeline with conditional judge loop for generating comprehensive SOPs from video recordings",
+  "nodes": [
+    {"id": "input_node", "type": "Input", "label": "Video Upload", "nodeCategory": "input"},
+    {"id": "transcription_agent", "type": "Agent", "label": "Transcription Agent", "nodeCategory": "agent"},
+    {"id": "extraction_agent", "type": "Agent", "label": "Process Extraction Agent", "nodeCategory": "agent"},
+    {"id": "gap_detection_agent", "type": "Agent", "label": "Gap Detection Agent", "nodeCategory": "agent"},
+    {"id": "visual_gap_filler_agent", "type": "Agent", "label": "Visual Gap Filler Agent", "nodeCategory": "agent"},
+    {"id": "synthesis_agent", "type": "Agent", "label": "Documentation Synthesis Agent", "nodeCategory": "agent"},
+    {"id": "judge_agent", "type": "Agent", "label": "SOP Judge Agent", "nodeCategory": "agent"},
+    {"id": "judge_decision", "type": "Conditional", "label": "Judge Decision", "nodeCategory": "conditional"},
+    {"id": "output_node", "type": "Output", "label": "Final SOP", "nodeCategory": "end"}
+  ],
+  "edges": [
+    {"source": "input_node", "target": "transcription_agent"},
+    {"source": "transcription_agent", "target": "extraction_agent"},
+    {"source": "extraction_agent", "target": "gap_detection_agent"},
+    {"source": "gap_detection_agent", "target": "visual_gap_filler_agent"},
+    {"source": "visual_gap_filler_agent", "target": "synthesis_agent"},
+    {"source": "synthesis_agent", "target": "judge_agent"},
+    {"source": "judge_agent", "target": "judge_decision"},
+    {"source": "judge_decision", "target": "gap_detection_agent"},
+    {"source": "judge_decision", "target": "output_node"}
+  ],
+  "conditional_logic": {
+    "judge_decision": {
+      "condition_field": "result.verdict",
+      "routes": {
+        "GAPS_REMAINING": "gap_detection_agent",
+        "APPROVED": "output_node"
+      }
+    }
+  }
+}

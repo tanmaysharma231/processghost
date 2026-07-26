@@ -1,0 +1,42 @@
+{
+  "agent_name": "Process Extraction Agent",
+  "agent_id": "69ec5b33603f5bad913c0dbd",
+  "description": "Reads timestamped transcript. Extracts only explicitly stated process steps. Outputs numbered step list with direct quote evidence and timestamp range per step.",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "result": {
+      "steps": [
+        {
+          "step_number": "number",
+          "action": "string",
+          "evidence_quote": "string",
+          "timestamp_start": "string",
+          "timestamp_end": "string",
+          "prerequisites": "string",
+          "confidence": "string"
+        }
+      ],
+      "total_steps_extracted": "number",
+      "coverage_notes": "string"
+    }
+  },
+  "example_response": {
+    "result": {
+      "steps": [
+        {
+          "step_number": 0,
+          "action": "sample string",
+          "evidence_quote": "sample string",
+          "timestamp_start": "sample string",
+          "timestamp_end": "sample string",
+          "prerequisites": "sample string",
+          "confidence": "sample string"
+        }
+      ],
+      "total_steps_extracted": 0,
+      "coverage_notes": "sample string"
+    }
+  }
+}

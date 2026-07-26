@@ -1,0 +1,42 @@
+{
+  "agent_name": "Transcription Agent",
+  "agent_id": "69ec5b0720c378a25b45e8d2",
+  "description": "Extracts audio from uploaded video. Transcribes with Hinglish/English code-switching handling. Labels multiple speakers. Outputs structured transcript with numbered speaker turns and timestamps per turn.",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "result": {
+      "transcript": [
+        {
+          "turn_number": "number",
+          "speaker": "string",
+          "timestamp_start": "string",
+          "timestamp_end": "string",
+          "text": "string",
+          "language_notes": "string"
+        }
+      ],
+      "total_duration": "string",
+      "speaker_count": "number",
+      "language_detected": "string"
+    }
+  },
+  "example_response": {
+    "result": {
+      "transcript": [
+        {
+          "turn_number": 0,
+          "speaker": "sample string",
+          "timestamp_start": "sample string",
+          "timestamp_end": "sample string",
+          "text": "sample string",
+          "language_notes": "sample string"
+        }
+      ],
+      "total_duration": "sample string",
+      "speaker_count": 0,
+      "language_detected": "sample string"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "processghost"
+version = "0.1.0"
+description = "ProcessGhost: gap checker and SOP recovery for narrated walkthroughs"
+authors = ["AI Engineer Hackathon"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+openai = ">=1.13.0"
+streamlit = ">=1.31.0"
+pydantic = ">=2.5.0"
+langgraph = ">=0.0.30"
+ffmpeg-python = ">=0.2.0"
+moviepy = ">=1.0.3"
+pillow = ">=10.0.0"
+numpy = ">=1.26.0"
+tqdm = ">=4.66.0"
+python-dotenv = ">=1.0.0"
+tenacity = ">=8.2.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.4.0"
+black = ">=23.11.0"
+ruff = ">=0.1.7"
+
+[build-system]
+requires = ["poetry-core>=1.7.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

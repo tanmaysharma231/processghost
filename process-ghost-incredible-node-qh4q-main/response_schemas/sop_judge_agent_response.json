@@ -1,0 +1,56 @@
+{
+  "agent_name": "SOP Judge Agent",
+  "agent_id": "69ec5b5b9291081b210b36f8",
+  "description": "Reviews the complete draft SOP as a senior process auditor persona. Evaluates logical sequencing, remaining implicit assumptions, and new-hire readiness. Outputs structured verdict: APPROVED or GAPS_REMAINING with specific findings.",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "result": {
+      "verdict": "string",
+      "confidence_score": "number",
+      "evaluation": {
+        "logical_sequencing": "string",
+        "implicit_assumptions": "string",
+        "prerequisite_completeness": "string",
+        "decision_criteria": "string",
+        "edge_cases": "string"
+      },
+      "findings": [
+        {
+          "finding_id": "number",
+          "severity": "string",
+          "related_step": "number",
+          "issue": "string",
+          "recommendation": "string"
+        }
+      ],
+      "iteration_notes": "string",
+      "approval_conditions": "string"
+    }
+  },
+  "example_response": {
+    "result": {
+      "verdict": "sample string",
+      "confidence_score": 0,
+      "evaluation": {
+        "logical_sequencing": "sample string",
+        "implicit_assumptions": "sample string",
+        "prerequisite_completeness": "sample string",
+        "decision_criteria": "sample string",
+        "edge_cases": "sample string"
+      },
+      "findings": [
+        {
+          "finding_id": 0,
+          "severity": "sample string",
+          "related_step": 0,
+          "issue": "sample string",
+          "recommendation": "sample string"
+        }
+      ],
+      "iteration_notes": "sample string",
+      "approval_conditions": "sample string"
+    }
+  }
+}
