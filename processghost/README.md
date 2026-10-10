@@ -1,22 +1,42 @@
 # ProcessGhost
 
-Compare what an expert **says** (transcript) vs what they **do** (screen actions) in a narrated
-screen recording and flag the gaps -- the expertise blindness -- before writing documentation or
-automating the process.
+Compare what an expert **says** (transcript) vs what they actually **do** (screen actions) in a
+narrated screen recording, and surface the gap -- the expertise blindness -- before writing
+documentation or automating the process. The recording is treated as a sample of someone
+explaining a process, not the source of truth: the pipeline's job is to find what they never said
+out loud, so it can be asked back to them directly.
 
-This implementation is built on the working pipeline infrastructure from the `process-integrity`
-hackathon project (real ffmpeg frame extraction, real Whisper transcription, a deterministic
-alignment + rule engine, Streamlit UI), with intent extraction, action description, and gap
-cross-checking now wired to real OpenAI chat/vision calls instead of heuristics. Intent extraction
-sees the WHOLE transcript in one call (not one call per line) so it can notice a reference used
-repeatedly and never resolved, or a claim made once that nothing else in the recording backs up --
-verified against a real narrated walkthrough to catch gaps like an unnamed sheet referenced three
-different ways, and a claimed "this updates automatically" that no observed action ever confirmed.
-See `../docs/00-README.md` for the full ProcessGhost concept and design docs, `../docs/06-known-
-gaps.md` for what the original Next.js/Lyzr reference app got wrong, and `../docs/12-real-scenario-
-target.md` for the real verified test case this pipeline is validated against (not optimized for).
+Pipeline: **Writer -> Reviewer -> Checker -> Triage**, four sequential LLM-driven stages producing
+one validated `SOPDocument`, rendered into two outputs from the same source
+(`sop.md` for a human, `build_spec.json` for a future build agent). See
+`../docs/14-writer-reviewer-checker.md` for the full architecture, `../docs/15-provenance-and-doc-
+format.md` for the attribution grammar and document format, and `../docs/00-README.md` for the
+full ProcessGhost concept and design docs. `../docs/12-real-scenario-target.md` documents the real
+verified test case this pipeline is validated against (not optimized for) --
+`../docs/18-known-gaps-v2.md` is the current defect register.
+
+- **Writer** (transcript -> draft SOP, one LLM call): converts narration into ordered imperative
+  steps, deliberately naively -- never repairs a vague reference. If the narration says "paste it
+  here," the step says "paste it here." The one FATAL stage: no fallback, since a run with no
+  document has nothing for later stages to work with.
+- **Reviewer** (draft SOP -> transitions + flags, one LLM call): names what carries between every
+  consecutive step pair, grounded in a verbatim transcript quote the code verifies -- an
+  unbridged or ungrounded pair becomes a synthesized structural flag. Separately runs four
+  ambiguity checks (unresolved pointer words, missing names, unstated selection rules, unverified
+  "automatically" claims) over every step. Degrades instead of failing the run: a failed call sets
+  `review_failed=True` and ships the Writer's document with zero flags.
+- **Checker** (per flag: frames -> resolution, one LLM call per flag): resolves each flag against
+  video frames (OpenAI: real vision, per call) or OCR text (Sarvam: one batched OCR job across all
+  checked flags, then a text call per flag). Verdicts: `resolved`, `contradicted`, or
+  `unresolvable` -- an `unresolvable` verdict is a real, useful result, not a failure: it means the
+  answer lives only in the recorder's head, which becomes a question in the final document rather
+  than a guess. A failed call marks that one flag `check_failed`; the run continues.
+- **Triage** (pure deterministic function, no LLM call): `report/build_spec.py: triage_flag`
+  reduces every flag's `(status, severity)` to `proceed_with_assumption` / `proceed_with_flag` /
+  `block_and_escalate`, building the severity-sorted escalation queue.
 
 ## Quickstart
+
 1. Install via conda (recommended):
    ```bash
    conda env create -f environment.yml
@@ -26,69 +46,81 @@ target.md` for the real verified test case this pipeline is validated against (n
    ```bash
    pip install -r requirements.txt
    ```
-   Install ffmpeg if missing: `conda install -c conda-forge ffmpeg`.
-2. Set environment variables: copy `.env.example` to `.env` and add your `OPENAI_API_KEY`.
-3. Run Streamlit UI:
+   **Prerequisite: `ffmpeg` and `ffprobe` must both be on PATH** -- the pipeline shells out to
+   both directly. Install with `conda install -c conda-forge ffmpeg` (installs both binaries), or
+   your OS's package manager. Any test that shells out to either binary is skipped automatically if
+   it isn't found.
+2. Set environment variables: copy `.env.example` to `.env` and add the key for whichever provider
+   you're using. `core/config.py: LLM_PROVIDER` defaults to `"sarvam"` (needs `SARVAM_API_KEY`);
+   set it to `"openai"` to use `OPENAI_API_KEY` instead. Only the active provider's key is
+   required at runtime.
+3. Run the Streamlit UI:
    ```bash
    streamlit run app/streamlit_app.py
    ```
-4. Upload an mp4 with narration, tweak sampling (frame interval), run, and download the gap report.
+4. Upload an mp4 with narration, run, and download `sop.md` (the four-section document: the
+   workflow as spoken, what the pipeline assumed, what's missing, and the questions to ask) and
+   `build_spec.json` (the escalation queue).
 
 ## Project Layout
 ```
 processghost/
   app/streamlit_app.py        # UI
-  core/                       # pipeline components
+  core/
     io/                       # video/audio extraction, storage, image encoding
-    llm/                      # OpenAI client + prompts
-    models/                   # Pydantic schemas
-    align/                    # intent/action alignment
-    rules/                    # rule engine + dissonance rules
-  report/render.py            # report generation (md/html)
-  runs/                       # per-run artifacts (video, frames, json, reports)
-  logs/                       # workflow + change logs + run metrics
-  tests/                      # unit tests (no API key needed) + gated integration test
+    llm/                      # LLMClient (OpenAI/LangChain) + SarvamClient + prompts + parsing
+    models/sop.py             # the v2 data contract: SOPStep, Flag, StepTransition, Resolution,
+                               #   SOPDocument (provenance-validated), and the LLM-facing
+                               #   WriterOutput/ReviewerOutput/CheckerOutput schemas
+    models/tokens.py          # TranscriptSegment only
+    pipeline.py                # run_pipeline: Writer -> Reviewer -> Checker -> Triage
+    config.py                  # LLM_PROVIDER, pricing, Checker frame/cap tuning
+  report/
+    sop_render.py              # deterministic sop.md renderer (four sections, pure function)
+    build_spec.py              # deterministic build_spec.json renderer + triage_flag
+  runs/                        # per-run artifacts (video, frames, sop.json, sop.md,
+                                #   build_spec.json, trace.jsonl)
+  tests/                       # unit tests (no API key needed) + gated real-video integration tests
 ```
 
-## Logging
-- `logs/workflow.log`: run-time events for the current workflow.
-- `logs/change-log.md`: append-only log of design/code changes with timestamps.
-- `logs/run-metrics.csv`: per-run token/cost/time metrics (OpenAI calls) -- now includes real
-  chat/vision call costs, not just Whisper.
-- Each run also writes `runs/<run_id>/run.json` with metrics and file paths.
+## Logging and traces
+- Every LLM/OCR/transcription call writes one line to `runs/<run_id>/trace.jsonl` immediately
+  (crash-safe), tagged with stage (`writer`/`reviewer`/`checker`/`transcribe`/
+  `checker_ocr_batch`), token counts, real cost (`core/config.py: PRICING_PER_1M_TOKENS`,
+  `WHISPER_COST_PER_MINUTE`, `SARVAM_OCR_COST_PER_PAGE`), and latency.
+- `runs/<run_id>/run.json` records the run's metrics and file paths.
+- `runs/<run_id>/sop_draft.md` (Writer + Reviewer only, pre-Checker) and `sop.md` (final) are both
+  kept, giving a free before/after diff of what the Checker changed.
 
 ## Constraints & Defaults
-- OpenAI only: Whisper for transcription, `gpt-4o` for intent extraction, `gpt-4o-mini` (vision)
-  for action description. See `.env.example` for the model env vars.
-- Vision calls are capped per run (`core/config.py: MAX_VISION_CALLS_PER_RUN`) -- if more frames
-  are extracted than the cap, they're evenly subsampled before any vision call is made, to keep
-  cost and latency bounded.
-- ROI: auto presets only (center, center+top_bar). Manual ROI hooks reserved but not exposed in UI
-  yet -- real crop application is a documented next step, not implemented here.
-- Rule set: unexplained action, silent step, unresolved reference, unconfirmed outcome,
-  teleportation, optional contradiction.
-- Intent extraction and the cross-check are each ONE call per run, not one per transcript segment
-  or one per intent-action pair -- cost stays flat regardless of video length; only the vision
-  calls scale with frame count (and that's capped, see above).
-- If the transcript-extraction call, the cross-check call, or an action-description call fails or
-  returns malformed JSON, that step falls back (heuristic for intents, empty findings for the
-  cross-check) and the failure is recorded in the run's metrics -- no bad call fails the whole run.
-
-## What's real vs. not yet built
-- Real: audio extraction, frame extraction, transcription, whole-transcript intent extraction
-  (LLM, with entity/selection-criteria/claimed-outcome tagging), action description (vision LLM),
-  deterministic alignment, a cross-check pass (LLM) that finds unresolved entity references and
-  unconfirmed claimed outcomes across the whole run, the resulting 6-rule dissonance engine, report
-  rendering, per-run persistence, Streamlit UI.
-- Not yet built (see `../docs/11-open-questions.md` and the plan history): SOP synthesis into a
-  full annotated document, an automatic judge/critique loop, real crop-region application.
+- Dual provider: `core/config.py: LLM_PROVIDER` (`"openai"` or `"sarvam"`, default `"sarvam"`).
+  OpenAI uses LangChain's `ChatOpenAI` + `with_structured_output` for every reasoning call and the
+  raw SDK for Whisper transcription. Sarvam has no true vision model -- the Checker's OpenAI path
+  sends real frames per call, the Sarvam path runs one batched OCR job across all checked flags'
+  frames first, then reasons over the extracted text per flag.
+- Checker cost control: `MAX_CHECKED_FLAGS` (default 20, open flags processed severity-first;
+  anything over the cap is marked `unchecked`, never silently dropped), `CHECKER_FRAME_INTERVAL_S`
+  / `CHECKER_MAX_FRAMES_PER_FLAG` (dense per-flag sampling), `CHECKER_MAX_OCR_FRAMES` (Sarvam OCR
+  batch cap). The Checker is the dominant cost stage by a wide margin (per-flag vision calls run
+  ~$0.04-0.06 vs ~$0.006-0.008 for the Writer's or Reviewer's entire whole-transcript call) --
+  `MAX_CHECKED_FLAGS` has never actually bound on any real run so far, see
+  `../docs/18-known-gaps-v2.md`.
+- Every LLM call site follows the same pattern: try -> on failure, `Metrics.record_failure(stage,
+  meta)` -> a defined degradation (see the Writer/Reviewer/Checker summaries above) -- no single
+  bad call fails the whole run except the Writer's.
+- Scenario-agnostic prompts: no sheet/vendor/column name is ever baked into
+  `core/llm/prompts.py`, enforced by a grep guard
+  (`tests/test_prompts_scenario_agnostic.py`) against the real scenario's actual answers.
 
 ## Development Notes
 - Python 3.11+, Pydantic v2.
-- Deterministic alignment (keywords + time proximity) still drives `r_unexplained`/
-  `r_silent_step`/`r_teleportation`. Semantic judgment (is a vague reference ever actually
-  resolved; is a claimed outcome ever actually confirmed) is handled by the cross-check LLM call
-  instead of a second alignment pass -- see the plan history for why a keyword/time scorer
-  structurally can't make that call reliably.
-- Artifacts are stored per run for auditability. Nothing is uploaded except OpenAI API calls for
-  transcription, transcript-wide intent extraction, action description, and the cross-check.
+- `SOPDocument`'s provenance rule (every content line traces to exactly one attribution: `said`,
+  `inferred`, or an open flag) is enforced by a raising `@model_validator`, not a soft flag -- an
+  invalid document cannot be constructed. See `../docs/15-provenance-and-doc-format.md`.
+- Every transition the Reviewer claims must be grounded in a `quote`, a verbatim transcript span
+  the code (`core/llm/parsing.py: _quote_is_grounded`) verifies is an actual substring of the
+  transcript before trusting it as coverage -- an invented or paraphrased quote is treated exactly
+  like an omitted transition. See `../docs/18-known-gaps-v2.md` entry 1 for why omission alone
+  (no quote requirement) proved unreliable.
+- Artifacts are stored per run for auditability. Nothing is uploaded except the active provider's
+  API calls for transcription and the three reasoning stages.

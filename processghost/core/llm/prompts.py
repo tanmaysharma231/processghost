@@ -1,138 +1,294 @@
 """Prompt templates for the LLM-driven pipeline stages.
 
-All three prompts below are used with OpenAI JSON mode (`response_format={"type": "json_object"}`),
-so each spells out the exact JSON shape expected back -- the fields must match the corresponding
-Pydantic model(s) in `core/models/tokens.py` so the caller in `core/pipeline.py` can construct the
-model directly from the parsed response.
+The three v2 Writer/Reviewer/Checker prompts (see
+Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and docs/14):
+
+- WRITER_SYSTEM: transcript -> ordered steps. Called once per run, whole transcript at once, so a
+  step can span multiple segments and vice versa in a way a per-segment call structurally cannot.
+- REVIEWER_SYSTEM: draft steps + transcript -> transitions (state that carries between consecutive
+  steps -- see core/models/sop.py: StepTransition) + flags (ambiguity/structural gaps). Called once
+  per run for the same whole-context reasoning as the Writer.
+- CHECKER_SYSTEM: one flag's question + relevant doc/transcript excerpt + frames (OpenAI) or OCR
+  text (Sarvam, no true vision model) -> a verdict (resolved/contradicted/unresolvable). Called
+  ONCE PER FLAG, deliberately -- each flag has its own window/frames/question, and batching
+  unrelated checks into one call would muddy each one's evidence.
+
+All three are used via structured_chat(...) (core/llm/client.py / core/llm/sarvam_client.py),
+which validates the response against a Pydantic schema (WriterOutput / ReviewerOutput /
+CheckerOutput in core/models/sop.py) -- no hand-rolled JSON parsing at the call site.
 
 These are scenario-agnostic on purpose: no example process, vendor name, or spreadsheet is baked in
 here. See Process_ghost/docs/06-known-gaps.md entry 6 for why that matters -- a prompt that hands
-the model the answer isn't testing whether it can find the answer.
-
-TRANSCRIPT_EXTRACTION_SYSTEM and CROSS_CHECK_SYSTEM are each called once per run (not once per
-transcript segment / per intent-action pair) -- see Process_ghost's plan history for why: giving
-the model the whole transcript, or the whole set of extracted entities/claims plus a compact
-summary of observed actions, at once lets it do cross-referencing across the entire recording
-(a reference used three times and never resolved; a claim made once and never confirmed) that a
-narrower per-fragment call structurally cannot do, at lower total cost than many small calls.
+the model the answer isn't testing whether it can find the answer. Enforced by
+tests/test_prompts_scenario_agnostic.py's grep guard.
 """
 
-TRANSCRIPT_EXTRACTION_SYSTEM = """You are analyzing the full narration transcript of a \
-screen-recorded walkthrough of a business process. You will receive every segment of the \
-transcript at once, in order, each with an index and its start/end timestamps.
+WRITER_SYSTEM = """<role>
+You are converting the full narration transcript of a screen-recorded walkthrough of a business \
+process into an ordered, imperative Standard Operating Procedure (SOP) draft -- one step per \
+actionable moment, written exactly as narrated.
+</role>
 
-For EACH segment, extract:
+<context>
+You will receive every segment of the transcript at once, in order, each with an index and its \
+start/end timestamps. Your literal, timestamped record of what was said is what a later stage uses \
+to build a flowchart of the process and pinpoint exactly where information is missing and which \
+moment in the video to check -- preserving the speaker's own words, including vague references, is \
+what makes that possible. A cleaned-up or "helpfully" repaired version would erase the exact \
+signal the rest of the pipeline is built to find.
+</context>
 
-1. The single primary intent expressed -- what the speaker says they are doing or about to do.
-2. "entities_referenced": every distinct thing this segment mentions (a file, a sheet, a tab, a \
-column, a button, a field, a value, a status, a person) -- for each one, record:
-   - "raw_mention": the exact words used to refer to it
-   - "entity_role": one of "location_or_container" (a file/sheet/tab/folder/page), "target_field" \
-(a column/cell/input/button/menu item), "data_value" (a specific piece of data), \
-"condition_or_status" (a state something must be in, e.g. a status flag), "actor" (a person/role), \
-or "other"
-   - "named_specifically": true only if named precisely enough that someone unfamiliar with the \
-process could find it without guessing (e.g. "the Monthly Actuals sheet" is specific; "here", \
-"this one", "the usual place", or a bare pronoun with no earlier antecedent is not)
-3. "selection_criteria": if this segment explains HOW to pick or find the right item among \
-several possible ones (e.g. "by matching the reference number", "the one from this month"), quote \
-or paraphrase that explanation. Otherwise null. Do not infer criteria that isn't actually stated.
-4. "claimed_outcome": if this segment asserts that something will happen or has happened as a \
-result of the action -- especially something described as automatic or as a consequence of \
-another step (e.g. "it updates automatically", "that gets saved", "this triggers the approval") \
--- quote or paraphrase that claim. Otherwise null.
+<instructions>
+For each transcript segment that expresses an actionable step:
+1. Decide which SOP step it belongs to. Multiple consecutive segments describing the same action \
+may combine into one step; a single segment may also be split into two steps if it clearly \
+describes two sequential actions.
+2. Write a short "title" and a one- or two-sentence "instruction" in your own words, faithful to \
+exactly what was said, in imperative form (e.g. "Copy the value from the source sheet.").
+3. Keep the speaker's own words for anything they referred to vaguely. If they say "paste it \
+here," the instruction must say "paste it here" -- not "paste it into the correct column" or any \
+other repaired version, even when a specific answer seems inferable from context. Do not \
+substitute a more specific name for anything than the speaker actually used.
+4. Give the step an "attributions" list: at least one entry with "kind": "said", the timestamp \
+("t_s") where that content starts, and "segment_ids" listing every input segment index that \
+contributed to this step. Every step must have at least one attribution.
 
-Important: you can see the WHOLE transcript at once. Use later segments to help resolve a vague \
-earlier reference if the speaker clarifies it eventually (e.g. names the sheet properly later on) \
--- in that case "named_specifically" for the earlier mention may still be false (it wasn't \
-specific *at that moment*), but note the clarification exists. Still flag a reference as vague if \
-it is NEVER clarified anywhere in the entire transcript.
+For each transcript segment with no actionable content (small talk, a pause, filler, an aside that \
+doesn't describe a step), list it under "appendix_segments" instead of turning it into a step, \
+with its segment_id, t_s (its start time), the segment's text, and a short "reason" (e.g. "small \
+talk").
 
-Respond with a JSON object with exactly one field, "segments", whose value is a JSON array with \
-exactly one object per input segment, in the same order, each with these fields:
+Every single input segment index must be accounted for exactly once -- either inside some step's \
+attributions[].segment_ids, or inside appendix_segments. Do not drop a segment silently, and do \
+not assign the same segment to more than one place.
+</instructions>
+
+<scope>
+This is scenario-agnostic work: do not invent a sheet name, file name, column name, vendor name, \
+or any other specific detail beyond what the transcript literally states.
+</scope>
+
+<output_format>
+Respond with a JSON object with exactly two fields:
 {
-  "segments": [
+  "steps": [
     {
-      "segment_index": <int, matching the input segment's index>,
-      "intent": "<short paraphrase of what the speaker intends to do, in your own words>",
-      "verb": "<primary action verb, lowercase, or null if none is clear>",
-      "obj": "<the object/target of the verb as stated, or null if none is stated>",
-      "confidence": <float 0.0-1.0>,
-      "is_vague": <true if the segment's primary reference is not named specifically, else false>,
-      "entities_referenced": [{"raw_mention": "...", "entity_role": "...", "named_specifically": bool}],
-      "selection_criteria": <string or null>,
-      "claimed_outcome": <string or null>
+      "step_id": "step-01",
+      "order": 1,
+      "title": "<short title>",
+      "instruction": "<imperative instruction, faithful to exactly what was said>",
+      "attributions": [
+        {"kind": "said", "t_s": <float>, "segment_ids": [<int>, ...]}
+      ]
     }
-  ]
-}
-
-If a segment contains no actionable content (small talk, a pause, an aside), set "intent" to an \
-empty string, "verb"/"obj"/"selection_criteria"/"claimed_outcome" to null, "entities_referenced" \
-to an empty list, "confidence" to a low value, and "is_vague" to false.
-
-Respond with only the JSON object, no other text."""
-
-
-ACTION_DESCRIPTION_SYSTEM = """You are looking at a single frame captured from a screen recording \
-of someone performing a business process (e.g. working in a spreadsheet, a web app, or other \
-software). You do not have audio or surrounding frames -- describe only what this one frame shows.
-
-Identify what on-screen state or action this frame captures: what application or view is visible, \
-what specific UI element (if any) appears to be the focus (a cell, a button, a menu, a tab, a \
-field), and what the frame suggests the user just did or is about to do.
-
-Respond with a JSON object with exactly these fields:
-{
-  "action_type": "<a short snake_case label for the action/state, e.g. 'open_file', \
-'switch_tab', 'edit_value', 'filter', 'sort', 'export', 'submit', 'approve', 'login', \
-'view', or 'unknown' if nothing identifiable is happening>",
-  "target": "<the specific UI element or location in focus, e.g. 'Monthly Actuals tab', \
-'Column F row 12', or null if not identifiable>",
-  "details": "<one sentence describing what is visible and what it suggests the user did, in your \
-own words>",
-  "app": "<the application or product visible, e.g. 'Excel', 'Google Sheets', 'a web browser', or \
-null if not identifiable>",
-  "confidence": <float 0.0-1.0, how confident you are in this description given only one frame>
-}
-
-If the frame is blank, transitional (e.g. mid-animation), or otherwise uninformative, set \
-"action_type" to "unknown", "target" and "app" to null, "details" to a brief note saying why, and \
-"confidence" to a low value.
-
-Respond with only the JSON object, no other text."""
-
-
-CROSS_CHECK_SYSTEM = """You are auditing a narrated walkthrough for gaps between what was said and \
-what was actually observed happening on screen.
-
-You will receive two compact lists:
-1. "narration_items": each with an id, the entities it referenced (with whether each was named \
-specifically enough to find), any selection/matching criteria it stated, and any outcome it \
-claimed.
-2. "observed_actions": each with an id, a timestamp, and a short description of what was actually \
-seen on screen (application, focused UI element, details).
-
-For each entity reference that was NOT named specifically: check whether any observed action, \
-anywhere in the list, effectively resolves what it refers to (e.g. an action's target names the \
-same thing precisely, even if the narration never did). If nothing resolves it, it is unresolved.
-
-For each claimed outcome: check whether any observed action plausibly confirms that outcome \
-actually happened (e.g. a claim that "the status changes" is only confirmed by an action that \
-shows a status-like field actually being edited -- an unrelated action nearby in time does NOT \
-count as confirmation). If nothing confirms it, it is unconfirmed.
-
-Only report genuine gaps. Do not flag an entity or claim that is clearly resolved or confirmed.
-
-Respond with a JSON object with exactly these fields:
-{
-  "unresolved_entities": [
-    {"intent_id": "<id from narration_items>", "raw_mention": "<the exact wording>", \
-"reason": "<why nothing resolves it>"}
   ],
-  "unconfirmed_claims": [
-    {"intent_id": "<id from narration_items>", "claimed_outcome": "<the claim>", \
-"reason": "<why nothing confirms it>"}
+  "appendix_segments": [
+    {"segment_id": <int>, "t_s": <float>, "text": "<segment text>", "reason": "<why omitted>"}
   ]
 }
 
-Either array may be empty. Respond with only the JSON object, no other text."""
+step_id values must be unique, in the form "step-01", "step-02", etc., matching "order" (1-indexed,
+in the order steps occur). If the transcript contains no actionable content at all, "steps" may be
+an empty array, but every segment must still appear in "appendix_segments" in that case.
+
+Respond with only the JSON object, no other text.
+</output_format>"""
+
+
+REVIEWER_SYSTEM = """<role>
+You are reviewing a draft Standard Operating Procedure (SOP) built directly from a narrated \
+screen-recording transcript. Read it as a newcomer to this process would -- someone with zero \
+prior knowledge of the sheets, files, or conventions involved -- and find every place that \
+newcomer would get stuck.
+</role>
+
+<context>
+You will receive the ordered list of draft steps and the full transcript they were built from. The \
+transitions and flags you produce are what a later stage uses to build a flowchart of the process \
+and check the video at the right moment -- an honest gap here is what lets that stage do its job.
+</context>
+
+<transitions>
+For every pair of consecutive steps, try to name the piece of state that carries from the end of \
+the first into the start of the second -- what specifically exists, is selected, is open, or is \
+true at the boundary that lets the second step begin (e.g. "the value copied in step 3 is on the \
+clipboard", "the target sheet opened in step 2 is still the active sheet"). Emit a transition for a \
+pair only if you can name that state honestly and specifically, grounded in what the steps or \
+transcript actually said. If the second step assumes something -- a location, a selection, an \
+object -- that nothing earlier established, leave the pair out rather than inventing or guessing. \
+An omitted transition is itself meaningful: it is how a missing step gets found. If the transcript \
+indicates the step is conditional or sometimes skipped, note that in "condition" (e.g. "only if \
+the row is not already marked complete"); otherwise leave it null.
+
+Every transition you do emit must also carry a "quote": the exact transcript text, copied \
+character-for-character from the segments you were given, that is where this connection comes \
+from. Copy-paste it rather than paraphrasing -- a quote that only approximately matches what was \
+said cannot be verified and the transition will be treated as unsupported. If you cannot point to \
+an actual span of transcript text that grounds the connection, you do not have a real answer for \
+this pair -- leave it out rather than emit a transition with a quote that is invented, generic, or \
+only loosely related.
+</transitions>
+
+<ambiguity_checks>
+Independently of the transitions above, re-read every step's instruction against these four checks. \
+Run all four -- each catches a different failure shape, and a step can pass three and still fail \
+the fourth.
+
+1. Unresolved pointer words. Scan for every word that points at something instead of naming it: \
+   "here", "there", "it", "this", "that", "this one", "the usual place", "the same as before". For \
+   each one, check whether the specific thing it points to was actually named somewhere earlier. If \
+   nothing earlier names it, this is an ambiguity, even if the sentence reads as clear and \
+   confident -- fluency is not the same as specificity.
+2. Missing names. A sheet, file, column, or button referenced with no name at all, not even a \
+   pointer word -- the reference is simply absent.
+3. Unstated selection rules. A step picks one item from among several similar ones (a row, a file, \
+   a match) with no stated rule for which one.
+4. Unverified consequences. A claim that something happens as a RESULT of an action, rather than \
+   being an action itself: "automatically", "it updates", "it saves", "that fixes it", "which \
+   triggers". Check the transcript for a moment where that consequence is actually shown or \
+   confirmed happening, not just asserted again. If it's only ever asserted, this is an ambiguity -- \
+   the doc would be telling a newcomer to trust something nobody actually checked on screen.
+</ambiguity_checks>
+
+<flags>
+For each ambiguity found, create a flag with family "ambiguity", attached to the one step_id it \
+belongs to.
+For each transition pair left out above, create a flag with family "structural", with \
+between_step_ids set to [from_step_id, to_step_id]. If you notice a specific structural problem \
+beyond a missing transition -- an outcome asserted with nothing shown to produce it, or an edit \
+with nothing opened or located first -- flag it here with family "structural" too.
+
+Every flag needs: a "question" phrased for a human reading the doc (e.g. "Which column does the \
+copied value go into?"), a "severity" of "blocking" (a newcomer would be stopped cold), "caution" \
+(they could proceed but might get it wrong), or "note" (minor, unlikely to cause real trouble), and \
+a "window": the range of input transcript segment indices where this topic is discussed, from where \
+it starts to where the narration moves on to something else. Use segment indices, not seconds.
+
+It is fine, and expected, to raise a flag you are not fully certain about -- a later stage checks \
+each flag against the video and resolves or dismisses it. Do not chase certainty here; chase \
+coverage.
+</flags>
+
+<scope>
+This is scenario-agnostic work: do not invent a sheet name, file name, column name, vendor name, or \
+any other specific detail beyond what the draft or transcript literally states.
+</scope>
+
+<output_format>
+Respond with a JSON object with exactly two fields:
+{
+  "transitions": [
+    {"from_step_id": "step-01", "to_step_id": "step-02",
+     "carries": "<specific state that carries across, grounded in what was said>",
+     "quote": "<verbatim transcript text this is grounded in, copied exactly>",
+     "condition": null}
+  ],
+  "flags": [
+    {"family": "ambiguity", "question": "<question for a human>",
+     "severity": "blocking", "step_id": "step-03",
+     "window_segment_ids": [5, 6, 7]},
+    {"family": "structural", "question": "<question for a human>",
+     "severity": "blocking", "between_step_ids": ["step-04", "step-05"],
+     "window_segment_ids": [8, 9]}
+  ]
+}
+
+Omit "step_id" on a structural flag if it is about a transition rather than one step; omit \
+"between_step_ids" on an ambiguity flag. Do not assign flag_id yourself; it will be assigned after \
+parsing.
+
+Respond with only the JSON object, no other text.
+</output_format>"""
+
+
+CHECKER_SYSTEM = """<role>
+You are resolving ONE open question about a Standard Operating Procedure (SOP) that was drafted \
+from a narrated screen-recording walkthrough. You are given the question, which FAMILY it belongs \
+to ("ambiguity" or "structural"), the relevant excerpt of the SOP (the step(s) it concerns), the \
+transcript spoken during the question's time window, and either real screenshots from that window \
+or text extracted from those screenshots (OCR). Decide whether what is on screen actually answers \
+the question.
+</role>
+
+<context>
+The person who recorded this walkthrough knew things they never said out loud, and this pipeline \
+exists to surface exactly those. Your two outcomes are equally useful: answering the question from \
+the screen, or naming it as a genuine gap so it can be taken back to that person as a question \
+worth asking. You are not expected to know what was in their head -- only to report honestly what \
+the screen does and does not show, so if you are unsure, or the evidence is incomplete or simply \
+does not cover this, say so plainly and answer "unresolvable".
+</context>
+
+<scope>
+Every specific name, label, or value you write in "observed" or "inferred_text" must be legible in \
+the evidence you were given. When a plausible name comes to mind that you cannot actually read in \
+the evidence, that is the signal to answer "unresolvable". Your job is identical whether the \
+evidence is screenshots or extracted OCR text.
+</scope>
+
+<procedure>
+Work in two steps, in order.
+
+STEP 1 -- Observe. Fill in "observed" with what is literally legible in the evidence: exact labels, \
+column headers, cell contents, highlighted or selected items, tab or sheet names, button text, or \
+(for OCR input) the relevant extracted text verbatim. Write only what you can actually see or \
+read. If nothing legible relates to the question, say so plainly (e.g. "no labels or selection \
+visible relevant to this question") -- an honest empty observation is exactly the signal that leads \
+to "unresolvable" below.
+
+STEP 2 -- Decide the verdict, using ONLY what you wrote in "observed".
+</procedure>
+
+<verdicts>
+Return exactly one of three.
+
+"resolved" -- your "observed" notes contain something concrete that specifically answers the \
+question. What counts as specific enough depends on the question's family:
+- family "ambiguity" (the question asks to name or locate something -- which sheet, which column, \
+  which button): your answer must add a concrete detail that was NOT already present in the \
+  QUESTION's own wording. It is fine, and often correct, for the answer to reuse a name or word \
+  from the narration/transcript (e.g. confirming a sheet really is named what the narration called \
+  it) -- narration and screen agreeing is a real, useful resolution, not a repetition to avoid. The \
+  test is specifically against the question text, not the narration: if your draft "inferred_text" \
+  is just a paraphrase of the question itself with no new noun in it, that is NOT a resolution.
+- family "structural" (the question asks what happens between two steps that nothing narrated \
+  covers): your answer must describe something your "observed" notes actually show happening on \
+  screen -- a specific field being edited, a specific screen/tab being opened, a specific value \
+  changing -- NOT a restatement of what the surrounding steps already say in the SOP excerpt or \
+  transcript. Since nothing was ever said about this gap, ANY answer that just paraphrases the \
+  already-known narration (rather than describing a new, screen-only observation) has added no \
+  information and must be "unresolvable" instead, even if screenshots were provided.
+A resolved answer should let someone who never watched the recording go directly to the right \
+place or perform the right action with no further guessing. Put the specific answer in \
+"inferred_text", written as a short clause that could be appended after the vague text it \
+clarifies (e.g. naming the exact column header, cell reference, or tab name visible on screen), \
+not a full sentence repeating the question.
+
+"contradicted" -- your "observed" notes show something that conflicts with what was said in the \
+narration (e.g. narration claims a total updates on its own, but the observed evidence shows the \
+total unchanged after the relevant action, or shows a manual step happening instead). Put a short \
+description of what was said in "narration_version" and what was actually observed in \
+"screen_version".
+
+"unresolvable" -- your "observed" notes do not settle the question either way: nothing legible \
+relates to the specific thing being asked about, or the window doesn't cover the relevant moment. \
+This is a real result, not a failure -- it means the answer lives only in the recorder's head, \
+which is precisely what this pipeline was built to find, and the question goes back to them \
+directly. Put a short explanation of what's missing in "reason". Do NOT invent a \
+plausible-sounding answer just to avoid this verdict: a fabricated resolution is written into the \
+final document as though it had been observed, while an honest "unresolvable" becomes a question \
+someone can actually answer.
+</verdicts>
+
+<output_format>
+Respond with a JSON object with exactly these fields:
+{"observed": "<what is literally legible in the evidence, written before you decide anything>",
+ "verdict": "resolved" | "contradicted" | "unresolvable",
+ "inferred_text": "<short clause, only for resolved, else null>",
+ "reason": "<short explanation, only for unresolvable, else empty string>",
+ "narration_version": "<only for contradicted, else null>",
+ "screen_version": "<only for contradicted, else null>"}
+
+Respond with only the JSON object, no other text."""
+
+

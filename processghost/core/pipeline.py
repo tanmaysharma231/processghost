@@ -1,81 +1,103 @@
-"""End-to-end pipeline orchestrator.
+"""End-to-end pipeline orchestrator: the full Writer -> Reviewer -> Checker chain.
 
-Intent extraction, action description, and cross-checking are backed by real OpenAI chat/vision
-calls (see core/llm/prompts.py and core/llm/parsing.py). Each has a fallback used only when the
-live call fails or returns something that doesn't parse -- every fallback used is recorded on the
-run's metrics (Metrics.record_failure) rather than happening silently, so a run can always be
-audited for where it degraded. See Process_ghost/docs/08-target-pipeline-spec.md for the
-failure-handling rationale this follows.
+v2 design: see Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and
+docs/14-writer-reviewer-checker.md. `run_pipeline`: transcript -> one LLM call (Writer) -> a
+validated SOPDocument -> one LLM call (Reviewer, transitions/flags merged in) -> per-flag Checker
+calls (frames/OCR text -> resolutions merged back in) -> sop.md. The Writer is the one FATAL stage
+-- unlike every other LLM call site here, it has no per-item fallback, because there is no
+meaningful document to fall back to; on any failure (WriterFailedError) the run aborts, after
+recording the failure on the run's metrics. The Reviewer is non-fatal: on any failure it ships the
+Writer's document unchanged with review_failed=True and zero flags. The Checker is non-fatal per
+flag: a single flag's call failing marks that flag status="check_failed" and the run continues.
 
-Intent extraction and cross-checking are each ONE call per run (not one per transcript segment or
-one per intent-action pair) -- giving the model the whole transcript, or the whole set of extracted
-entities/claims plus a compact summary of observed actions, at once lets it do cross-referencing
-across the entire recording that a narrower per-fragment call structurally cannot do, at lower
-total cost than many small calls. See Process_ghost's plan history for the full reasoning.
+The v1 pipeline (core/align/, core/rules/, the intent/action/cross-check prompts and parsers) was
+deleted once the Checker replaced it end-to-end -- see git history for that code if it's ever
+needed for reference.
+
+Provider switch (config.LLM_PROVIDER): "openai" uses Whisper + LangChain's ChatOpenAI (see
+core/llm/client.py: structured_chat) for Writer/Reviewer/Checker reasoning, real vision per Checker
+call. "sarvam" uses Saaras v3 (batch STT) + Sarvam-105B, with no true vision model -- the Checker's
+Sarvam path OCRs every checked flag's frames in ONE batched document-intelligence job first, then
+reasons over the extracted text per flag -- see core/llm/sarvam_client.py for the full reasoning
+and what's confirmed vs. best-effort in that design. Both providers converge on the same
+segments_raw shape after transcription and the same structured_chat(...) -> BaseModel interface
+for every reasoning call, so _write_sop/_review_sop/_run_checker are provider-agnostic.
 """
 from __future__ import annotations
 
 import shutil
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from core import config
-from core.align.aligner import build_alignments
-from core.io import storage, video
-from core.io.images import frame_to_data_uri
+from core.io import storage
+from core.io import video as video_io
 from core.llm.client import LLMClient, Metrics, persist_metrics, persist_run_json
 from core.llm import prompts
 from core.llm.parsing import (
-    extract_chat_content,
-    parse_action_response,
-    parse_cross_check_response,
-    parse_transcript_extraction_response,
+    build_sop_from_writer_output,
+    merge_reviewer_output,
+    parse_sarvam_stt_result,
 )
-from core.models.tokens import (
-    ActionToken,
-    IntentToken,
+from core.llm.sarvam_client import SarvamClient
+from core.models.sop import (
+    Attribution,
+    CheckerOutput,
+    Flag,
+    FrameDescription,
+    InferredClause,
+    Resolution,
+    ReviewerOutput,
     RunArtifacts,
-    TranscriptSegment,
-    UnconfirmedClaimFinding,
-    UnresolvedEntityFinding,
+    SOPDocument,
+    SOPStep,
+    WriterOutput,
 )
-from core.rules import engine
-from core.rules import (
-    r_contradiction,
-    r_silent_step,
-    r_teleportation,
-    r_unconfirmed_outcome,
-    r_unexplained,
-    r_unresolved_reference,
-)
-from report import render
+from core.models.tokens import TranscriptSegment
+from report import sop_render
+from report.build_spec import write_build_spec
 
 
-def _intent_heuristic(seg: dict) -> IntentToken:
-    """Keyword-based fallback used when the LLM call fails or its response doesn't parse."""
-    text = seg.get("text", "")
-    is_vague = any(k in text.lower() for k in ["check", "verify", "review", "make sure"])
-    return IntentToken(
-        intent_id=f"intent_{int(seg.get('id', seg['start']))}",
-        t_s=float(seg["start"]),
-        span_s=float(seg["end"] - seg["start"]),
-        raw_text=text,
-        intent=text,
-        verb=None,
-        obj=None,
-        confidence=seg.get("confidence", 0.6),
-        is_vague=is_vague,
-    )
+def _make_client(metrics: Metrics):
+    """Provider factory -- the only place run_pipeline branches on config.LLM_PROVIDER for client
+    construction. Both client types expose a compatible .structured_chat(system_prompt, user_text,
+    schema, images=None) -> BaseModel and a .metrics attribute (Phase 3: LangChain for OpenAI,
+    JSON-mode-by-prompt for Sarvam -- see core/llm/client.py and core/llm/sarvam_client.py), so
+    _write_sop/_review_sop/the Checker work unchanged regardless of which one is active."""
+    if config.LLM_PROVIDER == "sarvam":
+        return SarvamClient(metrics=metrics)
+    return LLMClient(metrics=metrics)
 
 
-def _extract_intents_from_transcript(client: LLMClient, segments_raw: list[dict]) -> List[IntentToken]:
-    """Extract intents (and entities/selection-criteria/claimed-outcomes) for the WHOLE transcript
-    in a single chat call. On any failure -- the call itself, a wrong-length array, a field that
-    doesn't validate -- falls back to the keyword heuristic for every segment in the batch, and
-    records exactly one failure on the run's metrics."""
-    if not segments_raw:
-        return []
+def _transcribe(client, audio_path: Path) -> list[dict]:
+    """Transcription -- shape differs by provider, both converge on segments_raw:
+    list[{"id", "start", "end", "text"}], so everything after this is provider-agnostic."""
+    if config.LLM_PROVIDER == "sarvam":
+        stt_result = client.transcribe(audio_path)
+        return parse_sarvam_stt_result(stt_result)
+    transcript_resp = client.transcribe(audio_path)
+    return transcript_resp.get("segments", [])
+
+
+class WriterFailedError(RuntimeError):
+    """Raised when the Writer stage cannot produce a valid SOPDocument -- the one FATAL stage in
+    this pipeline. Unlike every other LLM call site in the (eventual) v2 pipeline, there is no
+    fallback here: a run with no document has nothing for the Reviewer or Checker to work with, so
+    the whole run aborts rather than shipping a degraded stand-in."""
+
+
+def _write_sop(client, run_id: str, segments_raw: list[dict]) -> SOPDocument:
+    """Draft the SOP from the whole transcript in a single structured_chat call (see
+    prompts.WRITER_SYSTEM -- same whole-transcript-at-once reasoning as the v1 pipeline's intent
+    extraction: giving the model everything at once lets steps span multiple segments and vice
+    versa in a way a per-segment call structurally cannot).
+
+    On ANY failure -- the call itself, output that doesn't validate against WriterOutput, a missing
+    segment, or a provenance violation caught inside build_sop_from_writer_output -- records exactly
+    one failure on the run's metrics and raises WriterFailedError. No fallback: see the class
+    docstring above.
+    """
     try:
         numbered = [
             {
@@ -86,196 +108,386 @@ def _extract_intents_from_transcript(client: LLMClient, segments_raw: list[dict]
             }
             for i, seg in enumerate(segments_raw)
         ]
-        response = client.chat(
-            [
-                {"role": "system", "content": prompts.TRANSCRIPT_EXTRACTION_SYSTEM},
-                {"role": "user", "content": str(numbered)},
-            ],
-            response_format={"type": "json_object"},
-        )
-        content = extract_chat_content(response)
-        return parse_transcript_extraction_response(content, segments_raw)
-    except Exception as exc:  # noqa: BLE001 - any failure here must degrade, not fail the run
-        client.metrics.record_failure(
-            "transcript_extraction", str(exc), meta={"segment_count": len(segments_raw)}
-        )
-        return [_intent_heuristic(seg) for seg in segments_raw]
+        output = client.structured_chat(prompts.WRITER_SYSTEM, str(numbered), WriterOutput, stage="writer")
+        return build_sop_from_writer_output(output, run_id=run_id, segments=segments_raw)
+    except Exception as exc:  # noqa: BLE001 - the one place a pipeline stage is allowed to fail the run
+        client.metrics.record_failure("writer", str(exc), meta={"segment_count": len(segments_raw)})
+        raise WriterFailedError(str(exc)) from exc
 
 
-def _action_heuristic(idx: int, frame_path: Path, t_s: float) -> ActionToken:
-    """Stub fallback used when the vision call fails, its response doesn't parse, or a frame was
-    subsampled out of the per-run vision-call budget (see config.MAX_VISION_CALLS_PER_RUN)."""
-    return ActionToken(
-        action_id=f"action_{idx:04d}",
-        t_s=t_s,
-        frame_path=frame_path,
-        action_type="unknown",
-        target=None,
-        details="",
-        app=None,
-        confidence=0.3,
-        roi=None,
+def _review_sop(client, doc: SOPDocument, segments_raw: list[dict]) -> SOPDocument:
+    """Review the drafted SOP in a single structured_chat call (see prompts.REVIEWER_SYSTEM): the
+    model walks every consecutive step pair and names what carries between them where it honestly
+    can, and separately flags ambiguous references. merge_reviewer_output then runs the coverage
+    check -- any consecutive pair the model left uncovered becomes a synthesized structural flag --
+    and returns doc with transitions/flags merged in. `segments_raw` is passed through so
+    merge_reviewer_output can verify each transition's "quote" actually occurs in the transcript
+    before counting it as coverage -- see docs/18-known-gaps-v2.md entry 1 for why silence alone
+    was not a reliable signal.
+
+    Non-fatal, unlike the Writer: on any failure this returns doc unchanged except for
+    review_failed=True and records exactly one failure on the run's metrics. A run with a valid
+    Writer document but a failed review still ships -- see sop_render's "REVIEW FAILED" banner --
+    rather than throwing away a document that has nothing wrong with it.
+    """
+    try:
+        numbered_steps = [
+            {
+                "step_id": s.step_id,
+                "order": s.order,
+                "title": s.title,
+                "instruction": s.instruction,
+            }
+            for s in sorted(doc.steps, key=lambda s: s.order)
+        ]
+        numbered_segments = [
+            {
+                "segment_index": i,
+                "start_s": seg.get("start"),
+                "end_s": seg.get("end"),
+                "text": seg.get("text", ""),
+            }
+            for i, seg in enumerate(segments_raw)
+        ]
+        user_text = str({"steps": numbered_steps, "transcript": numbered_segments})
+        output = client.structured_chat(prompts.REVIEWER_SYSTEM, user_text, ReviewerOutput, stage="reviewer")
+        return merge_reviewer_output(output, doc, segments=segments_raw)
+    except Exception as exc:  # noqa: BLE001 - Reviewer failure must degrade, not fail the run
+        client.metrics.record_failure("reviewer", str(exc), meta={"step_count": len(doc.steps)})
+        return doc.model_copy(update={"review_failed": True})
+
+
+def _select_flags_for_check(doc: SOPDocument) -> Tuple[List[Flag], List[Flag]]:
+    """Sort open flags by severity (blocking first per the original plan) and split at
+    config.MAX_CHECKED_FLAGS. The trailing half is never silently dropped -- run_checker marks
+    each one status="unchecked" rather than leaving it "open" and indistinguishable from a flag
+    that was never even considered."""
+    severity_order = {"blocking": 0, "caution": 1, "note": 2}
+    open_flags = sorted(
+        (f for f in doc.flags if f.status == "open"), key=lambda f: severity_order.get(f.severity, 3)
+    )
+    return open_flags[: config.MAX_CHECKED_FLAGS], open_flags[config.MAX_CHECKED_FLAGS :]
+
+
+def _fallback_window_from_steps(flag: Flag, doc: SOPDocument) -> Tuple[float, float]:
+    """Used when a flag has no window_segment_ids/window_time_range to derive a time range from --
+    anchors on the flag's step (ambiguity) or the first of its two bounding steps (structural, from
+    the Reviewer's coverage-check synthesis), then widens by CHECKER_FALLBACK_WINDOW_S."""
+    by_id = {s.step_id: s for s in doc.steps}
+    anchor_id = flag.step_id or (flag.between_step_ids[0] if flag.between_step_ids else None)
+    step = by_id.get(anchor_id) if anchor_id else None
+    t0 = step.attributions[0].t_s if step and step.attributions else 0.0
+    return t0, t0 + config.CHECKER_FALLBACK_WINDOW_S
+
+
+def _flag_window_s(flag: Flag, doc: SOPDocument, transcript: List[TranscriptSegment]) -> Tuple[float, float]:
+    """Resolve a flag's frame-extraction window in seconds: window_time_range if the flag has one,
+    else the min/max timestamps of its window_segment_ids, else the step-anchored fallback above.
+    Then apply the lead-in and minimum-width config the same way for every flag."""
+    if flag.window_time_range:
+        start, end = flag.window_time_range
+    else:
+        ids = [i for i in flag.window_segment_ids if 0 <= i < len(transcript)]
+        if ids:
+            start = min(transcript[i].start_s for i in ids)
+            end = max(transcript[i].end_s for i in ids)
+        else:
+            start, end = _fallback_window_from_steps(flag, doc)
+
+    start = max(0.0, start - config.CHECKER_LEAD_IN_S)
+    if end - start < config.CHECKER_MIN_WINDOW_S:
+        end = start + config.CHECKER_MIN_WINDOW_S
+    return start, end
+
+
+def _flag_step_excerpt(doc: SOPDocument, flag: Flag) -> List[dict]:
+    ids = set()
+    if flag.step_id:
+        ids.add(flag.step_id)
+    if flag.between_step_ids:
+        ids.update(flag.between_step_ids)
+    return [
+        {"step_id": s.step_id, "order": s.order, "title": s.title, "instruction": s.instruction}
+        for s in doc.steps
+        if s.step_id in ids
+    ]
+
+
+def _flag_transcript_excerpt(flag: Flag, transcript: List[TranscriptSegment]) -> List[dict]:
+    return [
+        {"t_s": transcript[i].start_s, "text": transcript[i].text}
+        for i in flag.window_segment_ids
+        if 0 <= i < len(transcript)
+    ]
+
+
+def _apply_resolution(doc: SOPDocument, flag: Flag, output: CheckerOutput, frame_paths: List[Path]) -> SOPDocument:
+    """Merge one Checker verdict into `doc` -- the augment-don't-rewrite rule from docs/15 plus
+    your call on missing steps: a resolved AMBIGUITY flag gets an InferredClause appended to its
+    existing step (narrated text stays byte-stable); a resolved STRUCTURAL flag gets a brand new
+    SOPStep inserted between its two bounding steps, carrying only an "inferred" attribution since
+    nothing was said. `order` is renumbered by final list position afterward -- step_id is never
+    renumbered, so no other flag's step_id/between_step_ids reference can go stale.
+    """
+    t_s = video_io.frame_timestamp_from_name(frame_paths[0].name) if frame_paths else 0.0
+    evidence = (
+        [FrameDescription(frame_path=fp, t_s=video_io.frame_timestamp_from_name(fp.name)) for fp in frame_paths]
+        if output.verdict in ("resolved", "contradicted")
+        else []
+    )
+    reason = output.reason or ("nothing on screen settled this question" if output.verdict == "unresolvable" else "")
+    resolution = Resolution(
+        flag_id=flag.flag_id,
+        verdict=output.verdict,
+        inferred_text=output.inferred_text,
+        evidence=evidence,
+        reason=reason,
+        narration_version=output.narration_version,
+        screen_version=output.screen_version,
     )
 
+    steps = list(doc.steps)
+    flags = list(doc.flags)
+    idx = next(i for i, f in enumerate(flags) if f.flag_id == flag.flag_id)
+    new_status = flags[idx].status
+    new_severity = flags[idx].severity
 
-def _action_from_frame(client: LLMClient, idx: int, frame_path: Path, t_s: float) -> ActionToken:
-    """Describe one extracted frame via a real vision call."""
+    if output.verdict == "resolved":
+        new_status = "resolved"
+        if flag.family == "ambiguity" and flag.step_id:
+            clause = InferredClause(text=output.inferred_text or "", t_s=t_s, frame_paths=frame_paths, flag_id=flag.flag_id)
+            for i, s in enumerate(steps):
+                if s.step_id == flag.step_id:
+                    steps[i] = s.model_copy(
+                        update={
+                            "inferred_clauses": s.inferred_clauses + [clause],
+                            "flag_ids": s.flag_ids + [flag.flag_id],
+                        }
+                    )
+                    break
+        elif flag.family == "structural" and flag.between_step_ids:
+            from_id, _to_id = flag.between_step_ids
+            new_step = SOPStep(
+                step_id=f"step-ins-{flag.flag_id}",
+                order=0,  # placeholder; every step's order is renumbered by final position below
+                title=(output.inferred_text or "Inferred step")[:60],
+                instruction=output.inferred_text or "",
+                attributions=[Attribution(kind="inferred", t_s=t_s, frame_paths=frame_paths)],
+                flag_ids=[flag.flag_id],
+            )
+            insert_at = next((i for i, s in enumerate(steps) if s.step_id == from_id), len(steps) - 1) + 1
+            steps.insert(insert_at, new_step)
+    elif output.verdict == "contradicted":
+        new_status = "contradicted"
+        new_severity = "blocking"
+    elif output.verdict == "unresolvable":
+        new_status = "unresolvable"  # a distinct terminal status, not the same as never-checked
+
+    flags[idx] = flags[idx].model_copy(update={"status": new_status, "severity": new_severity})
+    steps = [s.model_copy(update={"order": i + 1}) for i, s in enumerate(steps)]
+    return doc.model_copy(update={"steps": steps, "flags": flags, "resolutions": doc.resolutions + [resolution]})
+
+
+def _check_one_flag(
+    client,
+    doc: SOPDocument,
+    flag: Flag,
+    transcript: List[TranscriptSegment],
+    frame_paths: List[Path],
+    ocr_text_by_frame: Dict[str, str],
+) -> SOPDocument:
+    """Resolve one flag: one structured_chat call (see prompts.CHECKER_SYSTEM), images for OpenAI
+    or OCR text for Sarvam (no true vision model -- see core/llm/sarvam_client.py). On ANY failure
+    -- no frames/OCR text available, the call itself, output that doesn't validate -- the flag gets
+    status="check_failed" and the run continues; a single flag's failure never aborts the run."""
     try:
-        data_uri = frame_to_data_uri(frame_path, max_dimension=config.VISION_MAX_DIMENSION)
-        response = client.vision(
-            [
-                {"role": "system", "content": prompts.ACTION_DESCRIPTION_SYSTEM},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Describe this frame."},
-                        {"type": "image_url", "image_url": {"url": data_uri}},
-                    ],
-                },
-            ],
-            response_format={"type": "json_object"},
+        user_text = str(
+            {
+                "question": flag.question,
+                "family": flag.family,
+                "step_excerpt": _flag_step_excerpt(doc, flag),
+                "transcript_excerpt": _flag_transcript_excerpt(flag, transcript),
+            }
         )
-        content = extract_chat_content(response)
-        return parse_action_response(content, idx=idx, frame_path=frame_path, t_s=t_s)
-    except Exception as exc:  # noqa: BLE001 - any failure here must degrade, not fail the run
-        client.metrics.record_failure(
-            "action_description", str(exc), meta={"frame": str(frame_path)}
-        )
-        return _action_heuristic(idx, frame_path, t_s)
+        if config.LLM_PROVIDER == "sarvam":
+            ocr_text = "\n\n".join(
+                ocr_text_by_frame[fp.name] for fp in frame_paths if ocr_text_by_frame.get(fp.name)
+            )
+            if not ocr_text:
+                raise RuntimeError("no OCR text available for this flag's frames")
+            output = client.structured_chat(
+                prompts.CHECKER_SYSTEM,
+                user_text + "\n\nExtracted screen text:\n" + ocr_text,
+                CheckerOutput,
+                stage="checker",
+                payload_extra={"flag_id": flag.flag_id},
+            )
+        else:
+            if not frame_paths:
+                raise RuntimeError("no frames extracted for this flag's window")
+            output = client.structured_chat(
+                prompts.CHECKER_SYSTEM,
+                user_text,
+                CheckerOutput,
+                images=frame_paths,
+                stage="checker",
+                payload_extra={"flag_id": flag.flag_id},
+            )
+        return _apply_resolution(doc, flag, output, frame_paths)
+    except Exception as exc:  # noqa: BLE001 - one flag's failure must degrade, not fail the run
+        client.metrics.record_failure("checker", str(exc), meta={"flag_id": flag.flag_id})
+        flags = [
+            f.model_copy(update={"status": "check_failed"}) if f.flag_id == flag.flag_id else f
+            for f in doc.flags
+        ]
+        return doc.model_copy(update={"flags": flags})
 
 
-def _cross_check_resolution(
-    client: LLMClient, intents: List[IntentToken], actions: List[ActionToken]
-) -> Tuple[List[UnresolvedEntityFinding], List[UnconfirmedClaimFinding]]:
-    """One chat call, after both intents and actions are known: given compact text summaries of
-    what was said (entities referenced, selection criteria, claimed outcomes) and what was
-    observed (action type/target/details per sampled frame), find which entities are still
-    unresolved and which claims are still unconfirmed across the WHOLE run. On any failure,
-    records one failure on the run's metrics and returns two empty lists -- the two rules that
-    consume this simply produce no findings for the run rather than crashing it."""
-    narration_items = [
-        {
-            "intent_id": i.intent_id,
-            "entities_referenced": [e.model_dump() for e in i.entities_referenced],
-            "selection_criteria": i.selection_criteria,
-            "claimed_outcome": i.claimed_outcome,
-        }
-        for i in intents
-        if i.entities_referenced or i.selection_criteria or i.claimed_outcome
-    ]
-    observed_actions = [
-        {
-            "action_id": a.action_id,
-            "t_s": a.t_s,
-            "action_type": a.action_type,
-            "target": a.target,
-            "details": a.details,
-        }
-        for a in actions
-    ]
+def _run_checker(
+    client, doc: SOPDocument, transcript: List[TranscriptSegment], video_path: Path, checker_frames_dir: Path
+) -> SOPDocument:
+    """Phase 3: resolve every open flag, severity-first, up to MAX_CHECKED_FLAGS. Frame extraction
+    reuses core/io/video.py: extract_frames_window as-is -- it already handles cross-flag frame
+    sharing (filename-based dedupe in one flat out_dir) and grid quantization, so overlapping
+    windows cost nothing extra here. Sarvam batches every checked flag's frames into ONE
+    document-intelligence job before the per-flag loop (see SarvamClient.ocr_extract_frames) --
+    job-based OCR has real per-job latency, so one job per flag would be unacceptable; OpenAI skips
+    this and sends real frames per call instead.
+    """
+    checked, unchecked = _select_flags_for_check(doc)
+    if not checked and not unchecked:
+        return doc
 
-    if not narration_items:
-        return [], []
+    checker_frames_dir.mkdir(parents=True, exist_ok=True)
+    frames_by_flag: Dict[str, List[Path]] = {}
+    for flag in checked:
+        start_s, end_s = _flag_window_s(flag, doc, transcript)
+        try:
+            extracted = video_io.extract_frames_window(
+                video_path,
+                checker_frames_dir,
+                start_s,
+                end_s,
+                interval_s=config.CHECKER_FRAME_INTERVAL_S,
+                max_frames=config.CHECKER_MAX_FRAMES_PER_FLAG,
+            )
+            frames_by_flag[flag.flag_id] = [ef.path for ef in extracted]
+        except Exception as exc:  # noqa: BLE001 - one flag's extraction failing shouldn't block the rest
+            client.metrics.record_failure("checker_extract", str(exc), meta={"flag_id": flag.flag_id})
+            frames_by_flag[flag.flag_id] = []
 
-    try:
-        response = client.chat(
-            [
-                {"role": "system", "content": prompts.CROSS_CHECK_SYSTEM},
-                {
-                    "role": "user",
-                    "content": str({"narration_items": narration_items, "observed_actions": observed_actions}),
-                },
-            ],
-            response_format={"type": "json_object"},
-        )
-        content = extract_chat_content(response)
-        return parse_cross_check_response(content)
-    except Exception as exc:  # noqa: BLE001 - any failure here must degrade, not fail the run
-        client.metrics.record_failure(
-            "cross_check", str(exc), meta={"intent_count": len(intents), "action_count": len(actions)}
-        )
-        return [], []
+    ocr_text_by_frame: Dict[str, str] = {}
+    if config.LLM_PROVIDER == "sarvam":
+        seen: set[str] = set()
+        all_frames: List[Path] = []
+        for flag in checked:
+            for fp in frames_by_flag.get(flag.flag_id, []):
+                if fp.name not in seen:
+                    seen.add(fp.name)
+                    all_frames.append(fp)
+        batch = video_io.subsample_evenly(all_frames, config.CHECKER_MAX_OCR_FRAMES)
+        if batch:
+            try:
+                ocr_text_by_frame = client.ocr_extract_frames(batch, workdir=checker_frames_dir)
+            except Exception as exc:  # noqa: BLE001 - whole OCR batch failing shouldn't block extraction results
+                client.metrics.record_failure("checker_ocr", str(exc), meta={"frame_count": len(batch)})
+
+    for flag in checked:
+        doc = _check_one_flag(client, doc, flag, transcript, frames_by_flag.get(flag.flag_id, []), ocr_text_by_frame)
+
+    if unchecked:
+        unchecked_ids = {f.flag_id for f in unchecked}
+        flags = [
+            f.model_copy(update={"status": "unchecked"}) if f.flag_id in unchecked_ids else f
+            for f in doc.flags
+        ]
+        doc = doc.model_copy(update={"flags": flags})
+
+    return doc
 
 
 def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERVAL_S) -> RunArtifacts:
+    """Phase 1+2: audio extraction -> STT -> Writer -> Reviewer -> sop_draft.md. Checker (Phase 3)
+    is not implemented yet; frame_interval_s is accepted for API compatibility with the Streamlit
+    UI and future phases but is currently only used for the sparse frame pass, which nothing
+    downstream consumes yet.
+    """
     t0 = time.time()
     metrics = Metrics()
-    client = LLMClient(metrics=metrics)
+    client = _make_client(metrics)
 
     run_dir = storage.new_run_dir()
+    # Set before any LLM call happens so every call from here on appends to the trace immediately
+    # (crash-safe) rather than only being visible if the run makes it to persist_run_json at the end.
+    metrics.trace_path = run_dir / "trace.jsonl"
     local_video = run_dir / "video.mp4"
     shutil.copy(video_file, local_video)
-
     audio_path = run_dir / "audio.wav"
-    video.extract_audio(local_video, audio_path)
 
-    # Transcription via Whisper
-    transcript_resp = client.transcribe(audio_path)
-    segments_raw = transcript_resp.get("segments", [])
-    transcript = [
-        TranscriptSegment(
-            start_s=float(seg["start"]),
-            end_s=float(seg["end"]),
-            text=seg.get("text", ""),
-            speaker=None,
+    try:
+        video_io.extract_audio(local_video, audio_path)
+        segments_raw = _transcribe(client, audio_path)
+
+        transcript = [
+            TranscriptSegment(
+                start_s=float(seg["start"]),
+                end_s=float(seg["end"]),
+                text=seg.get("text", ""),
+                speaker=None,
+            )
+            for seg in segments_raw
+        ]
+
+        # Degraded-STT guard: parse_sarvam_stt_result falls back to a single segment spanning the
+        # whole transcript (start=0.0, end=0.0) when per-chunk timing is unavailable. Every
+        # [said @t] in the eventual doc would then read "@0:00" -- record it once here so the
+        # provenance rule fails loudly (via the timing_degraded banner) rather than shipping a
+        # document full of fake attributions.
+        timing_degraded = len(transcript) == 1 and transcript[0].end_s == 0.0
+        if timing_degraded:
+            metrics.record_failure(
+                "stt_timing_degraded",
+                "STT returned only one whole-transcript segment; per-line timestamps are unreliable",
+                meta={"segment_count": len(segments_raw)},
+            )
+
+        sop = _write_sop(client, run_dir.name, segments_raw)
+        if timing_degraded:
+            sop = sop.model_copy(update={"timing_degraded": True})
+
+        sop = _review_sop(client, sop, segments_raw)
+
+        sop_draft_path = sop_render.write_sop(
+            sop, run_dir, video_name=video_file.name, filename="sop_draft.md"
         )
-        for seg in segments_raw
-    ]
 
-    # One call for the whole transcript (not one per segment) -- see module docstring.
-    intents: List[IntentToken] = _extract_intents_from_transcript(client, segments_raw)
+        checker_frames_dir = run_dir / "checker_frames"
+        sop = _run_checker(client, sop, transcript, local_video, checker_frames_dir)
 
-    # Frame sampling: extract at a fixed interval, then cap how many of those frames actually get
-    # a vision call (cost/latency guard) by evenly subsampling. Frames outside the vision budget
-    # still get an ActionToken, just via the heuristic stub rather than a real description -- see
-    # Process_ghost/docs/09-visual-gap-filler.md for the fuller scene-change-sampling design this
-    # is a placeholder for.
-    frames_dir = run_dir / "frames"
-    frames = video.extract_frames(local_video, frames_dir, interval_s=frame_interval_s)
-    frames_for_vision = set(video.subsample_evenly(frames, config.MAX_VISION_CALLS_PER_RUN))
+        sop_md_path = sop_render.write_sop(sop, run_dir, video_name=video_file.name, filename="sop.md")
+        sop_render.write_sop_json(sop, run_dir)
+        build_spec_path = write_build_spec(sop, run_dir)
 
-    # naive timestamp mapping: interval * idx
-    actions: List[ActionToken] = []
-    for idx, fp in enumerate(frames):
-        t_s = idx * frame_interval_s
-        if fp in frames_for_vision:
-            actions.append(_action_from_frame(client, idx, fp, t_s))
-        else:
-            actions.append(_action_heuristic(idx, fp, t_s))
+        artifacts = RunArtifacts(
+            run_id=run_dir.name,
+            video_path=local_video,
+            audio_path=audio_path,
+            frames_dir=run_dir / "frames",
+            checker_frames_dir=checker_frames_dir,
+            transcript=transcript,
+            sop=sop,
+            sop_draft_md=sop_draft_path,
+            sop_md=sop_md_path,
+            build_spec_path=build_spec_path,
+        )
 
-    alignments = build_alignments(actions, intents)
+        duration_s = time.time() - t0
+        artifacts.metrics = metrics.to_dict() | {"duration_s": duration_s}
+        persist_run_json(run_dir, artifacts.model_dump())
+        return artifacts
+    finally:
+        # Persist metrics even on a fatal WriterFailedError abort, so a failed run is still
+        # auditable from logs/run-metrics.csv.
+        persist_metrics(run_dir.name, metrics, video_name=video_file.name, duration_s=time.time() - t0)
 
-    # One call, after both intents and actions are known -- see module docstring.
-    unresolved_entities, unconfirmed_claims = _cross_check_resolution(client, intents, actions)
 
-    artifacts = RunArtifacts(
-        run_id=run_dir.name,
-        video_path=local_video,
-        audio_path=audio_path,
-        frames_dir=frames_dir,
-        transcript=transcript,
-        intents=intents,
-        actions=actions,
-        alignments=alignments,
-        unresolved_entities=unresolved_entities,
-        unconfirmed_claims=unconfirmed_claims,
-    )
-
-    rules = [
-        r_unexplained.rule,
-        r_silent_step.rule,
-        r_unresolved_reference.rule,
-        r_unconfirmed_outcome.rule,
-        r_teleportation.rule,
-    ]
-    if config.ENABLE_CONTRADICTION:
-        rules.append(r_contradiction.rule)
-
-    artifacts = engine.run_rules(artifacts, rules)
-    artifacts = render.write_reports(artifacts, run_dir)
-
-    duration_s = time.time() - t0
-    artifacts.metrics = metrics.to_dict() | {"duration_s": duration_s}
-    persist_metrics(artifacts.run_id, metrics, video_name=video_file.name, duration_s=duration_s)
-    persist_run_json(run_dir, artifacts.model_dump())
-    return artifacts

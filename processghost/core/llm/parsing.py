@@ -8,20 +8,250 @@ core/pipeline.py are responsible for catching and falling back to the heuristic 
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
-from core.models.tokens import (
-    ActionToken,
-    EntityReference,
-    IntentToken,
-    UnconfirmedClaimFinding,
-    UnresolvedEntityFinding,
+from core.text_grounding import normalize_for_quote_match, quote_is_grounded
+from core.models.sop import (
+    Attribution,
+    AppendixSegment,
+    Flag,
+    ReviewerOutput,
+    SOPDocument,
+    SOPStep,
+    StepTransition,
+    WriterOutput,
 )
+from pydantic import ValidationError
 
 
 class LLMResponseParseError(ValueError):
-    """Raised when an LLM JSON-mode response cannot be parsed into the expected model."""
+    """Raised when an LLM response cannot be turned into the expected model."""
+
+
+def build_sop_from_writer_output(output: WriterOutput, run_id: str, segments: List[dict]) -> SOPDocument:
+    """Turn a validated WriterOutput (core/models/sop.py; produced by
+    LLMClient/SarvamClient.structured_chat -- see core/llm/client.py) into a SOPDocument.
+
+    Shape validation is pydantic's job now (WriterOutput's schema), done before this function is
+    even called. What's left here is the one business rule shape validation can't express: every
+    input segment index must be accounted for exactly once, in some step's attributions or in
+    appendix_segments. Raises LLMResponseParseError on a missing segment or a provenance violation
+    caught from SOPDocument's own validator. The Writer stage is fatal on any failure (see
+    core/pipeline.py: WriterFailedError) -- there is no per-step fallback.
+    """
+    steps: List[SOPStep] = []
+    accounted_for: set[int] = set()
+    for item in output.steps:
+        attributions = []
+        for a in item.attributions:
+            accounted_for.update(a.segment_ids)
+            attributions.append(Attribution(kind="said", t_s=a.t_s, segment_ids=a.segment_ids))
+        steps.append(
+            SOPStep(
+                step_id=item.step_id,
+                order=item.order,
+                title=item.title,
+                instruction=item.instruction,
+                attributions=attributions,
+            )
+        )
+
+    appendix: List[AppendixSegment] = []
+    for item in output.appendix_segments:
+        accounted_for.add(item.segment_id)
+        appendix.append(
+            AppendixSegment(segment_id=item.segment_id, t_s=item.t_s, text=item.text, reason=item.reason)
+        )
+
+    expected_ids = {i for i in range(len(segments))}
+    missing = expected_ids - accounted_for
+    if missing:
+        raise LLMResponseParseError(f"Segment index(es) unaccounted for: {sorted(missing)}")
+
+    try:
+        return SOPDocument(run_id=run_id, steps=steps, appendix_segments=appendix)
+    except ValidationError as exc:
+        raise LLMResponseParseError(f"Writer output failed provenance validation: {exc}") from exc
+
+
+# Grounding primitive moved to core/text_grounding.py (needed there too, by the intake stage,
+# without importing core.llm.parsing and its sop-model dependencies). Kept as private aliases here
+# so every existing call site and test reference in this module stays valid unchanged.
+_normalize_for_quote_match = normalize_for_quote_match
+_quote_is_grounded = quote_is_grounded
+
+
+def merge_reviewer_output(
+    output: ReviewerOutput, doc: SOPDocument, segments: List[dict] | None = None
+) -> SOPDocument:
+    """Turn a validated ReviewerOutput (core/models/sop.py) into `doc` with `transitions` and
+    `flags` populated.
+
+    This is where the coverage check lives -- the actual gap-detection mechanism (see
+    core/models/sop.py: StepTransition docstring and docs/14-writer-reviewer-checker.md). The
+    Reviewer prompt asks the model to emit a StepTransition ONLY where it can honestly name the
+    state that carries between two consecutive steps, and to leave a pair out otherwise -- there is
+    no "ok"/"broken" field for the model to self-report. This function walks doc.steps in `order`
+    and, for every consecutive pair with no matching transition, synthesizes a `structural` Flag
+    itself. The judgement (which pairs connect) stays entirely with the model; this function only
+    counts.
+
+    `segments` (the raw transcript segments, each with a "text" field -- the same shape
+    core/pipeline.py already has on hand) grounds that judgement in something checkable: a
+    transition only counts as covered if its "quote" field actually occurs in the transcript
+    (see _quote_is_grounded). Before this check existed, silence (an omitted or empty-`carries`
+    row) was the only signal a gap existed, and it turned out to be unreliable -- the model's own
+    laziness and a genuinely unbridgeable pair produced the exact same silence. See
+    docs/18-known-gaps-v2.md entry 1. `segments=None` (e.g. an old caller, or a test not exercising
+    this path) disables the check and falls back to the pre-quote behavior, so this stays backward
+    compatible rather than a breaking change to every call site at once.
+
+    Any transition the model emitted between two step_ids that are NOT consecutive in `order` is
+    dropped rather than trusted -- the coverage check only reasons about the fixed narration-order
+    chain, so an out-of-order or duplicate transition can't be used to paper over a real gap.
+
+    Raises LLMResponseParseError on a provenance violation caught from SOPDocument's own
+    validator. Non-fatal at the call site (see core/pipeline.py) -- unlike the Writer, a Reviewer
+    failure sets review_failed=True and ships zero flags rather than aborting the run.
+    """
+    ordered_steps = sorted(doc.steps, key=lambda s: s.order)
+    consecutive_pairs = [
+        (ordered_steps[i].step_id, ordered_steps[i + 1].step_id)
+        for i in range(len(ordered_steps) - 1)
+    ]
+    transcript_text = " ".join(seg.get("text", "") for seg in segments) if segments is not None else None
+
+    model_transitions: List[StepTransition] = []
+    for item in output.transitions:
+        carries = (item.carries or "").strip()
+        if not carries:
+            # No honest answer -- treat exactly like an omitted row, not an error.
+            continue
+        if transcript_text is not None and not _quote_is_grounded(item.quote, transcript_text):
+            # A claimed connection with no real quote behind it is exactly as untrustworthy as
+            # silence -- do not let it count as coverage.
+            continue
+        model_transitions.append(
+            StepTransition(
+                from_step_id=item.from_step_id,
+                to_step_id=item.to_step_id,
+                carries=carries,
+                quote=(item.quote or "").strip() or carries,
+                condition=item.condition,
+            )
+        )
+
+    # Drop anything not on the fixed narration-order chain -- the coverage check only trusts
+    # transitions between steps that are actually consecutive.
+    transitions = [t for t in model_transitions if (t.from_step_id, t.to_step_id) in consecutive_pairs]
+    covered = {(t.from_step_id, t.to_step_id) for t in transitions}
+
+    flags: List[Flag] = []
+    for i, item in enumerate(output.flags):
+        between = tuple(item.between_step_ids) if item.between_step_ids else None
+        flags.append(
+            Flag(
+                flag_id=f"FLAG-{i + 1:02d}",
+                family=item.family,
+                question=item.question,
+                severity=item.severity,
+                window_segment_ids=item.window_segment_ids,
+                step_id=item.step_id,
+                between_step_ids=between,
+            )
+        )
+
+    # Pairs the model already raised its own structural flag for -- see the loop above. A
+    # model-emitted flag is a real, specific question; the synthesized flag below is a generic
+    # "the reviewer could not identify..." placeholder. Without this, a pair the model both
+    # (a) noticed as a specific structural problem and (b) separately failed to name a covering
+    # transition for would get BOTH flags, contradicting each other once the Checker resolves one
+    # of them (a real, observed shape -- see docs/18-known-gaps-v2.md). The model's flag wins;
+    # the synthesized one for that pair is skipped rather than emitted alongside it.
+    model_flagged_pairs = {
+        f.between_step_ids for f in flags if f.family == "structural" and f.between_step_ids
+    }
+
+    # The coverage check itself: every consecutive step pair not covered by a transition, and not
+    # already flagged directly by the model, gets a synthesized structural flag. Plain counting
+    # over `covered`, no LLM judgement.
+    next_flag_num = len(flags) + 1
+    for from_id, to_id in consecutive_pairs:
+        if (from_id, to_id) in covered or (from_id, to_id) in model_flagged_pairs:
+            continue
+        window = _bounding_segment_ids(ordered_steps, from_id, to_id)
+        flags.append(
+            Flag(
+                flag_id=f"FLAG-{next_flag_num:02d}",
+                family="structural",
+                question=(
+                    f"What happens between {from_id} and {to_id}? The reviewer could not "
+                    "identify what carries over between these two steps."
+                ),
+                severity="blocking",
+                window_segment_ids=window,
+                between_step_ids=(from_id, to_id),
+            )
+        )
+        next_flag_num += 1
+
+    try:
+        return doc.model_copy(update={"transitions": transitions, "flags": flags})
+    except ValidationError as exc:
+        raise LLMResponseParseError(f"Reviewer output failed provenance validation: {exc}") from exc
+
+
+def _bounding_segment_ids(ordered_steps: List[SOPStep], from_id: str, to_id: str) -> List[int]:
+    """Best-effort window for a synthesized structural flag: the last attributed segment of the
+    step before the gap and the first attributed segment of the step after it. Used only so the
+    flag has a non-empty window (provenance requires one) -- the Checker (Phase 3) still needs to
+    widen this into an actual frame-extraction window."""
+    by_id = {s.step_id: s for s in ordered_steps}
+    ids: List[int] = []
+    before = by_id.get(from_id)
+    after = by_id.get(to_id)
+    if before and before.attributions:
+        ids.extend(before.attributions[-1].segment_ids[-1:])
+    if after and after.attributions:
+        ids.extend(after.attributions[0].segment_ids[:1])
+    return ids
+
+
+def parse_sarvam_stt_result(result: dict) -> List[dict]:
+    """Convert a Sarvam speech-to-text batch job's result dict into the same segments_raw shape
+    (list of {"id", "start", "end", "text"}) Whisper's `segments` list already provides -- so
+    everything downstream (TranscriptSegment construction, _extract_intents_from_transcript) needs
+    no changes regardless of which provider produced the transcript.
+
+    Expected input shape (per docs.sarvam.ai; NOT independently confirmed against a real response,
+    see core/llm/sarvam_client.py's module docstring):
+        {"transcript": "...", "timestamps": {"chunks": [...], "start_time_seconds": [...],
+         "end_time_seconds": [...]}, ...}
+    Parallel arrays, one entry per sentence/phrase chunk. If "timestamps" is missing or the arrays
+    are inconsistent length, falls back to a single segment covering the whole transcript at t=0
+    (still usable, just without sub-segment timing) rather than raising -- a transcript with worse
+    timing beats no transcript at all.
+    """
+    transcript_text = result.get("transcript") or ""
+    timestamps = result.get("timestamps") or {}
+    chunks = timestamps.get("chunks")
+    starts = timestamps.get("start_time_seconds")
+    ends = timestamps.get("end_time_seconds")
+
+    if (
+        isinstance(chunks, list)
+        and isinstance(starts, list)
+        and isinstance(ends, list)
+        and len(chunks) == len(starts) == len(ends)
+        and len(chunks) > 0
+    ):
+        return [
+            {"id": i, "start": float(starts[i]), "end": float(ends[i]), "text": chunks[i]}
+            for i in range(len(chunks))
+        ]
+
+    # No usable per-chunk timing -- one segment spanning the whole transcript.
+    return [{"id": 0, "start": 0.0, "end": 0.0, "text": transcript_text}]
 
 
 def extract_chat_content(response: dict) -> str:
@@ -30,134 +260,3 @@ def extract_chat_content(response: dict) -> str:
         return response["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMResponseParseError(f"Response missing choices[0].message.content: {exc}") from exc
-
-
-def _parse_entity_references(raw_list) -> List[EntityReference]:
-    if raw_list is None:
-        return []
-    if not isinstance(raw_list, list):
-        raise LLMResponseParseError(f"entities_referenced must be a list, got {type(raw_list).__name__}")
-    refs = []
-    for item in raw_list:
-        if not isinstance(item, dict):
-            raise LLMResponseParseError(f"entities_referenced item must be an object, got {type(item).__name__}")
-        refs.append(
-            EntityReference(
-                raw_mention=str(item.get("raw_mention", "")),
-                entity_role=str(item.get("entity_role") or "other"),
-                named_specifically=bool(item.get("named_specifically", False)),
-            )
-        )
-    return refs
-
-
-def parse_transcript_extraction_response(raw_content: str, segments: List[dict]) -> List[IntentToken]:
-    """Parse a whole-transcript extraction JSON-mode response into one IntentToken per segment.
-
-    The response must be a JSON object with a "segments" array containing exactly one item per
-    input segment, in the same order (mapped positionally via zip -- `segment_index` in each item
-    is informational only, not relied on for correctness). Raises on any structural problem --
-    wrong length, wrong type, a field that doesn't validate -- so the caller in core/pipeline.py
-    can fall back to the heuristic path for the whole batch rather than accept a partially-wrong
-    result.
-    """
-    try:
-        parsed = json.loads(raw_content)
-    except json.JSONDecodeError as exc:
-        raise LLMResponseParseError(f"Not valid JSON: {exc}") from exc
-
-    if not isinstance(parsed, dict):
-        raise LLMResponseParseError(f"Expected a JSON object, got {type(parsed).__name__}")
-
-    data = parsed.get("segments")
-    if not isinstance(data, list):
-        raise LLMResponseParseError(f"Expected 'segments' to be an array, got {type(data).__name__}")
-    if len(data) != len(segments):
-        raise LLMResponseParseError(f"Expected {len(segments)} items, got {len(data)}")
-
-    tokens: List[IntentToken] = []
-    for item, seg in zip(data, segments):
-        if not isinstance(item, dict):
-            raise LLMResponseParseError(f"Array item must be an object, got {type(item).__name__}")
-        text = seg.get("text", "")
-        try:
-            tokens.append(
-                IntentToken(
-                    intent_id=f"intent_{int(seg.get('id', seg['start']))}",
-                    t_s=float(seg["start"]),
-                    span_s=float(seg["end"] - seg["start"]),
-                    raw_text=text,
-                    intent=str(item.get("intent") or text),
-                    verb=item.get("verb") or None,
-                    obj=item.get("obj") or None,
-                    confidence=float(item.get("confidence", 0.0)),
-                    is_vague=bool(item.get("is_vague", False)),
-                    entities_referenced=_parse_entity_references(item.get("entities_referenced")),
-                    selection_criteria=item.get("selection_criteria") or None,
-                    claimed_outcome=item.get("claimed_outcome") or None,
-                )
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise LLMResponseParseError(f"Response item did not match IntentToken shape: {exc}") from exc
-    return tokens
-
-
-def parse_cross_check_response(
-    raw_content: str,
-) -> Tuple[List[UnresolvedEntityFinding], List[UnconfirmedClaimFinding]]:
-    """Parse a cross-check JSON-mode response into (unresolved_entities, unconfirmed_claims)."""
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as exc:
-        raise LLMResponseParseError(f"Not valid JSON: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise LLMResponseParseError(f"Expected a JSON object, got {type(data).__name__}")
-
-    try:
-        unresolved = [
-            UnresolvedEntityFinding(
-                intent_id=str(item["intent_id"]),
-                raw_mention=str(item.get("raw_mention", "")),
-                reason=str(item.get("reason", "")),
-            )
-            for item in (data.get("unresolved_entities") or [])
-        ]
-        unconfirmed = [
-            UnconfirmedClaimFinding(
-                intent_id=str(item["intent_id"]),
-                claimed_outcome=str(item.get("claimed_outcome", "")),
-                reason=str(item.get("reason", "")),
-            )
-            for item in (data.get("unconfirmed_claims") or [])
-        ]
-    except (KeyError, TypeError, ValueError) as exc:
-        raise LLMResponseParseError(f"Response did not match cross-check shape: {exc}") from exc
-
-    return unresolved, unconfirmed
-
-
-def parse_action_response(raw_content: str, *, idx: int, frame_path: Path, t_s: float) -> ActionToken:
-    """Parse an action-description JSON-mode vision response into an ActionToken."""
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError as exc:
-        raise LLMResponseParseError(f"Not valid JSON: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise LLMResponseParseError(f"Expected a JSON object, got {type(data).__name__}")
-
-    try:
-        return ActionToken(
-            action_id=f"action_{idx:04d}",
-            t_s=t_s,
-            frame_path=frame_path,
-            action_type=str(data.get("action_type") or "unknown"),
-            target=data.get("target") or None,
-            details=data.get("details") or "",
-            app=data.get("app") or None,
-            confidence=float(data.get("confidence", 0.0)),
-            roi=None,
-        )
-    except (TypeError, ValueError) as exc:
-        raise LLMResponseParseError(f"Response did not match ActionToken shape: {exc}") from exc
