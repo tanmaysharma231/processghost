@@ -140,6 +140,20 @@ LLM_TEMPERATURE: float = 0.0
 CACHE_ENABLED: bool = True
 CACHE_DIR = ROOT / "cache"
 
+# Input and spend limits (core/guards.py, core/pipeline.py). Tight on purpose: the pipeline is only
+# validated on recordings of tens of seconds, and cost grows with length.
+MAX_VIDEO_BYTES: int = 500 * 1024 * 1024
+MAX_VIDEO_DURATION_S: float = 900.0
+# Soft budget for ONE run. Once estimated spend passes it the Checker stops starting new flags and
+# marks the rest "unchecked" (never silently dropped). Writer/Reviewer are not interrupted. Cache hits
+# cost nothing. Set to 0 to disable.
+MAX_RUN_COST_USD: float = 2.0
+# Per-request timeout for provider calls (seconds); without it a stalled connection hangs the run.
+LLM_TIMEOUT_S: float = 120.0
+# Keep the video copy, audio and frames of each run on disk. Set False (scripts/run_pipeline.py
+# --no-keep-media) to delete them when the run ends; see docs/data-handling.md and core/retention.py.
+KEEP_RUN_MEDIA: bool = True
+
 # Logging
 WORKFLOW_LOG_PATH = LOGS_DIR / "workflow.log"
 CHANGE_LOG_PATH = LOGS_DIR / "change-log.md"

@@ -34,6 +34,8 @@ from core import config
 from core.io import storage
 from core.io import video as video_io
 from core.llm.client import LLMClient, Metrics, persist_metrics, persist_run_json
+from core import retention
+from core.guards import validate_input
 from core.manifest import build_manifest
 from core.llm import prompts
 from core.llm.parsing import (
@@ -495,7 +497,16 @@ def _run_checker(
             except Exception as exc:  # noqa: BLE001 - whole OCR batch failing shouldn't block extraction results
                 client.metrics.record_failure("checker_ocr", str(exc), meta={"frame_count": len(batch)})
 
-    for flag in checked:
+    for i, flag in enumerate(checked):
+        if client.metrics.over_budget():
+            # Stop starting new flags; the rest are marked "unchecked" below, same as the flag cap.
+            client.metrics.record_failure(
+                "budget_exceeded",
+                f"estimated spend ${client.metrics.cost_usd:.2f} reached MAX_RUN_COST_USD ${config.MAX_RUN_COST_USD:.2f}",
+                meta={"flags_not_checked": len(checked) - i},
+            )
+            unchecked = list(checked[i:]) + list(unchecked)
+            break
         if flag.flag_id in event_flag_ids:
             doc = _check_flag_with_events(
                 client, doc, flag, transcript, timeline, timeline_dir, checker_frames_dir / "events", ocr
@@ -549,6 +560,7 @@ def run_pipeline(
     UI and future phases but is currently only used for the sparse frame pass, which nothing
     downstream consumes yet.
     """
+    validate_input(video_file)  # refuse before any file is copied or any call is made
     t0 = time.time()
     metrics = Metrics()
     client = _make_client(metrics)
@@ -645,5 +657,7 @@ def run_pipeline(
         # Persist metrics even on a fatal WriterFailedError abort, so a failed run is still
         # auditable from logs/run-metrics.csv.
         persist_metrics(run_dir.name, metrics, video_name=video_file.name, duration_s=time.time() - t0)
+        if not config.KEEP_RUN_MEDIA:
+            retention.strip_media(run_dir)
 
 

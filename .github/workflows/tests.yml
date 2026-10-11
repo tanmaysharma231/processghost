@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: processghost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            processghost/requirements.txt
+            processghost/constraints.txt
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        working-directory: .
+      - name: Install dependencies
+        run: pip install -r requirements.txt -c constraints.txt pytest
+      - name: Run tests
+        # No API key on purpose: the one integration test skips itself without one.
+        run: python -m pytest tests -q
+        env:
+          OPENAI_API_KEY: ""
+          SARVAM_API_KEY: ""

@@ -63,6 +63,7 @@ Recorded here because they shape every document below and were made explicitly, 
 
 | Doc | Hook |
 |---|---|
+| `data-handling.md` | What a run stores on disk, what is sent to the model provider, what is NOT protected (no redaction, no encryption at rest), and the controls that exist: `--no-keep-media`, `--no-cache`, `scripts.cleanup`. |
 | `scope-and-limits.md` | What ProcessGhost deliberately does not do, and the known gaps (one clip, no web screens, Reviewer variance, weak resolved answers). |
 | `adr/` | Nine short decision records: what was chosen, why, what was rejected, and whether it is built, planned or open. |
 

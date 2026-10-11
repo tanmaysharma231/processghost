@@ -19,7 +19,7 @@ from typing import Any, Dict
 from core import config
 from core.llm import prompts
 
-_TRACKED_PACKAGES = ("openai", "langchain-openai", "langchain-core", "pydantic", "opencv-python-headless", "opencv-python", "rapidocr-onnxruntime")
+_TRACKED_PACKAGES = ("openai", "langchain-openai", "langchain-core", "pydantic", "opencv-python", "rapidocr-onnxruntime")
 _CONFIG_PREFIXES = ("MODEL_", "SARVAM_MODEL", "LLM_", "MAX_CHECKED", "CHECKER_", "SCREEN_", "RETRY_", "VISION_", "CACHE_ENABLED")
 
 

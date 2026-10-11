@@ -53,7 +53,7 @@ Everything above is expanded in `docs/scope-and-limits.md`.
 
 ```
 cd processghost
-pip install -r requirements.txt          # or: conda env create -f environment.yml
+pip install -r requirements.txt -c constraints.txt   # or: conda env create -f environment.yml
 export OPENAI_API_KEY=...                # needs ffmpeg on PATH
 python -m scripts.run_pipeline ../data/english_hackathon_test.mp4            # v2 behaviour
 python -m scripts.run_pipeline ../data/english_hackathon_test.mp4 --screen   # with the screen timeline
@@ -64,7 +64,9 @@ A run writes to `processghost/runs/<run_id>/`: `sop.md` (for people), `sop.json`
 and failure), and the evidence frames.
 
 Running the same input again is served from a local cache and costs nothing; pass `--no-cache` to
-force fresh calls. Tests: `cd processghost && python -m pytest tests -q` (no API key needed, except
+force fresh calls. Recordings over 15 minutes or 500 MB are refused, and a run stops starting new
+Checker calls once estimated spend passes $2 (`--max-cost` to change). Recordings may contain client
+data: read `docs/data-handling.md` first, and use `--no-keep-media` and `python -m scripts.cleanup`. Tests: `cd processghost && python -m pytest tests -q` (no API key needed, except
 one integration test that skips without a key and fixture).
 
 ## Output contract
@@ -80,6 +82,7 @@ resolved it (`checker_tier`), so a consumer can tell an observed answer from an 
 |---|---|
 | The reasoning behind the main choices | `docs/adr/` |
 | What it does not do | `docs/scope-and-limits.md` |
+| What is stored and what leaves the machine | `docs/data-handling.md` |
 | How a run works, stage by stage, with prompts | `docs/21-pipeline-reference.md` |
 | The v3 design (screen timeline, Align) | `docs/22-architecture-v3.md` |
 | What the Checker really did on real runs | `docs/23-checker-learnings.md` |

@@ -33,7 +33,7 @@ from core.io.storage import save_json
 def _load_client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-    return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=config.LLM_TIMEOUT_S)
 
 
 def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> Tuple[float, bool]:
@@ -67,6 +67,10 @@ class Metrics:
         # Stamped on every trace line (set by run_pipeline) so lines from different runs can be
         # concatenated and still told apart.
         self.run_id: Optional[str] = None
+
+    def over_budget(self) -> bool:
+        """True once estimated spend has passed config.MAX_RUN_COST_USD (0 disables the limit)."""
+        return config.MAX_RUN_COST_USD > 0 and self.cost_usd >= config.MAX_RUN_COST_USD
 
     def add(
         self,
@@ -298,7 +302,7 @@ class LLMClient:
         # max_retries=0: core/llm/retry.py owns retrying, so one call is never retried by two layers.
         chat_model = ChatOpenAI(
             model=model_name, api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE") or None,
-            temperature=config.LLM_TEMPERATURE, max_retries=0,
+            temperature=config.LLM_TEMPERATURE, max_retries=0, timeout=config.LLM_TIMEOUT_S,
         ).with_structured_output(schema, method="json_schema", include_raw=True)
 
         t0 = time.monotonic()
