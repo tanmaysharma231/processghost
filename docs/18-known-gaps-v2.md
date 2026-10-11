@@ -156,3 +156,20 @@ for rate-limit errors (vs. other failures), a small delay between per-flag Check
 surfacing `check_failed`-due-to-rate-limit distinctly from `check_failed`-due-to-something-else in
 the document. Not fixed this session -- recorded so it isn't mistaken for a Checker logic problem
 if seen again.
+
+---
+
+### 5. The Checker often echoes the prompt instead of describing the screen -- MEDIUM, measured, not fixed
+
+**Reality.** `CheckerOutput.observed` is supposed to hold what is literally legible in the frames.
+Replaying the five 2026-08-30 runs (`scripts/checker_replay.py`, details in
+`23-checker-learnings.md`) shows many `observed` fields restating the step title, instruction and
+transcript that were sent alongside the frames. Mean overlap with the prompt's own words: 0.34 for
+`resolved`, 0.54 for `unresolvable`; one flag scored 1.0 (a verbatim restatement).
+
+**Impact.** A `resolved` verdict can rest on text the model was handed rather than evidence it
+saw, and it is then written into the SOP as if observed. The observe-before-verdict procedure in
+`CHECKER_SYSTEM` is not enforcing what it was designed to enforce.
+
+**Fix required.** Yes, as part of the v3 Checker change: require `observed` to contain something
+not present in the prompt, and treat a high-echo observation as unresolvable. Not done yet.

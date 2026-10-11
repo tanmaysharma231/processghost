@@ -30,3 +30,6 @@ next-env.d.ts
 Thumbs.db
 .idea/
 .vscode/
+
+# Model-call cache (core/llm/cache.py): safe to delete at any time
+processghost/cache/

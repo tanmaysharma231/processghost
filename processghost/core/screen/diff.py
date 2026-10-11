@@ -27,7 +27,7 @@ class DiffResult(NamedTuple):
     identical: bool  # changed_frac < config.SCREEN_NO_CHANGE_FRAC and no box survived
 
 
-def _normalize(img: np.ndarray) -> Tuple[np.ndarray, float]:
+def normalize_frame(img: np.ndarray) -> Tuple[np.ndarray, float]:
     """Downscale to config.SCREEN_DIFF_WIDTH, grayscale, blur. Returns (gray, scale) where scale
     is downscaled_width / original_width, so a box can be mapped back to original pixels."""
     h, w = img.shape[:2]
@@ -50,8 +50,8 @@ def diff_boxes(
     if prev.shape[:2] != curr.shape[:2]:
         raise ValueError(f"frame size mismatch: {prev.shape[:2]} vs {curr.shape[:2]}")
 
-    a, scale = _normalize(prev)
-    b, _ = _normalize(curr)
+    a, scale = normalize_frame(prev)
+    b, _ = normalize_frame(curr)
     delta = cv2.absdiff(a, b)
     changed = (delta > config.SCREEN_PIXEL_THRESH).astype(np.uint8) * 255
 

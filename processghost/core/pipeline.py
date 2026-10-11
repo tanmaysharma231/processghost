@@ -28,12 +28,13 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from core import config
 from core.io import storage
 from core.io import video as video_io
 from core.llm.client import LLMClient, Metrics, persist_metrics, persist_run_json
+from core.manifest import build_manifest
 from core.llm import prompts
 from core.llm.parsing import (
     build_sop_from_writer_output,
@@ -55,6 +56,11 @@ from core.models.sop import (
     WriterOutput,
 )
 from core.models.tokens import TranscriptSegment
+from core.text_grounding import echo_score
+from core.screen.align import align_events
+from core.screen.evidence import build_evidence, select_events
+from core.screen.ocr import get_ocr
+from core.screen.timeline import build_screen_timeline
 from report import sop_render
 from report.build_spec import write_build_spec
 
@@ -343,8 +349,102 @@ def _check_one_flag(
         return doc.model_copy(update={"flags": flags})
 
 
+def _stamp_flag(doc: SOPDocument, flag_id: str, tier: str, level: int) -> SOPDocument:
+    flags = [
+        f.model_copy(update={"checker_tier": tier, "expansion_level": level}) if f.flag_id == flag_id else f
+        for f in doc.flags
+    ]
+    return doc.model_copy(update={"flags": flags})
+
+
+def _downgrade_echo(output: CheckerOutput, prompt_text: str) -> CheckerOutput:
+    """A `resolved` verdict whose observation mostly restates the prompt rather than the evidence
+    (docs/18 entry 5) becomes `unresolvable` -- a restated prompt cannot support a resolution."""
+    if output.verdict != "resolved":
+        return output
+    echo = echo_score(output.observed, prompt_text)
+    if echo is None or echo < config.CHECKER_ECHO_MAX:
+        return output
+    return output.model_copy(
+        update={
+            "verdict": "unresolvable",
+            "inferred_text": None,
+            "reason": "the observation restates the question, step or transcript rather than describing the evidence",
+        }
+    )
+
+
+def _check_flag_with_events(
+    client,
+    doc: SOPDocument,
+    flag: Flag,
+    transcript: List[TranscriptSegment],
+    timeline,
+    timeline_dir: Path,
+    evidence_dir: Path,
+    ocr,
+) -> SOPDocument:
+    """v3 Checker path (docs/22): evidence is built from the screen events attached to the flag
+    instead of fixed-interval frames. Level 0 sends the nearest event as OCR text + a text model;
+    if that is unresolvable, level 1 widens to +/-SCREEN_ESCALATION_EVENTS events and (OpenAI only,
+    Sarvam has no vision model) attaches the images. At most 2 calls per flag, and the model never
+    decides how much context it gets. Same failure contract as _check_one_flag."""
+    try:
+        w0, w1 = _flag_window_s(flag, doc, transcript)
+        context = {
+            "question": flag.question,
+            "family": flag.family,
+            "step_excerpt": _flag_step_excerpt(doc, flag),
+            "transcript_excerpt": _flag_transcript_excerpt(flag, transcript),
+        }
+        prompt_text = str(context)
+        output, pack, tier, level = None, None, "ocr", 0
+        for level in (0, 1):
+            events = select_events(flag.event_ids, timeline.events, (w0 + w1) / 2.0, level)
+            if not events:
+                raise RuntimeError("no screen events attached to this flag")
+            pack = build_evidence(events, timeline_dir, evidence_dir / flag.flag_id / f"level{level}", ocr)
+            if not pack.after_frames:
+                raise RuntimeError("no readable keyframes for this flag's events")
+            use_images = level == 1 and config.LLM_PROVIDER != "sarvam" and bool(pack.images)
+            tier = "vision" if use_images else "ocr"
+            user_text = (
+                prompt_text
+                + "\n\nEvidence:\n"
+                + pack.description
+                + ("\n\nExtracted screen text:\n" + pack.ocr_text if pack.ocr_text else "")
+            )
+            output = client.structured_chat(
+                prompts.CHECKER_EVENT_SYSTEM,
+                user_text,
+                CheckerOutput,
+                images=pack.images if use_images else None,
+                stage="checker",
+                payload_extra={"flag_id": flag.flag_id, "level": level, "tier": tier},
+            )
+            output = _downgrade_echo(output, prompt_text)
+            if output.verdict != "unresolvable":
+                break
+        doc = _apply_resolution(doc, flag, output, pack.after_frames)
+        return _stamp_flag(doc, flag.flag_id, tier, level)
+    except Exception as exc:  # noqa: BLE001 - one flag's failure must degrade, not fail the run
+        client.metrics.record_failure("checker", str(exc), meta={"flag_id": flag.flag_id, "path": "events"})
+        flags = [
+            f.model_copy(update={"status": "check_failed"}) if f.flag_id == flag.flag_id else f
+            for f in doc.flags
+        ]
+        return doc.model_copy(update={"flags": flags})
+
+
 def _run_checker(
-    client, doc: SOPDocument, transcript: List[TranscriptSegment], video_path: Path, checker_frames_dir: Path
+    client,
+    doc: SOPDocument,
+    transcript: List[TranscriptSegment],
+    video_path: Path,
+    checker_frames_dir: Path,
+    timeline=None,
+    timeline_dir: Optional[Path] = None,
+    ocr=None,
 ) -> SOPDocument:
     """Phase 3: resolve every open flag, severity-first, up to MAX_CHECKED_FLAGS. Frame extraction
     reuses core/io/video.py: extract_frames_window as-is -- it already handles cross-flag frame
@@ -359,8 +459,11 @@ def _run_checker(
         return doc
 
     checker_frames_dir.mkdir(parents=True, exist_ok=True)
+    # v3: a flag with screen events attached is checked from event evidence (no frame extraction, no
+    # OCR batch); every other flag takes the unchanged v2 path below.
+    event_flag_ids = {f.flag_id for f in checked if timeline is not None and f.event_ids}
     frames_by_flag: Dict[str, List[Path]] = {}
-    for flag in checked:
+    for flag in (f for f in checked if f.flag_id not in event_flag_ids):
         start_s, end_s = _flag_window_s(flag, doc, transcript)
         try:
             extracted = video_io.extract_frames_window(
@@ -380,7 +483,7 @@ def _run_checker(
     if config.LLM_PROVIDER == "sarvam":
         seen: set[str] = set()
         all_frames: List[Path] = []
-        for flag in checked:
+        for flag in (f for f in checked if f.flag_id not in event_flag_ids):
             for fp in frames_by_flag.get(flag.flag_id, []):
                 if fp.name not in seen:
                     seen.add(fp.name)
@@ -393,7 +496,12 @@ def _run_checker(
                 client.metrics.record_failure("checker_ocr", str(exc), meta={"frame_count": len(batch)})
 
     for flag in checked:
-        doc = _check_one_flag(client, doc, flag, transcript, frames_by_flag.get(flag.flag_id, []), ocr_text_by_frame)
+        if flag.flag_id in event_flag_ids:
+            doc = _check_flag_with_events(
+                client, doc, flag, transcript, timeline, timeline_dir, checker_frames_dir / "events", ocr
+            )
+        else:
+            doc = _check_one_flag(client, doc, flag, transcript, frames_by_flag.get(flag.flag_id, []), ocr_text_by_frame)
 
     if unchecked:
         unchecked_ids = {f.flag_id for f in unchecked}
@@ -406,7 +514,36 @@ def _run_checker(
     return doc
 
 
-def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERVAL_S) -> RunArtifacts:
+def _screen_stage(client, run_dir: Path, video_path: Path):
+    """Stage 0b: build the screen timeline. Non-fatal -- on any failure records `screen_failed` and
+    returns None, and the run continues with v2 behaviour (no silent-step flags, interval frames)."""
+    try:
+        timeline = build_screen_timeline(video_path, run_dir / "screen")
+        (run_dir / "screen" / "screen_events.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+        return timeline
+    except Exception as exc:  # noqa: BLE001 - a broken diff must not lose the run
+        client.metrics.record_failure("screen_failed", str(exc))
+        return None
+
+
+def _align_stage(client, run_dir: Path, doc: SOPDocument, timeline, transcript: List[TranscriptSegment]) -> SOPDocument:
+    """Stage 2b: silent-step flags + event attachment. Non-fatal -- on failure records
+    `align_failed` and returns the document unchanged."""
+    try:
+        result = align_events(doc, timeline.events, transcript)
+        storage.save_json(
+            {"records": result.records, "said_no_event_step_ids": result.said_no_event_step_ids},
+            run_dir / "alignment.json",
+        )
+        return result.doc
+    except Exception as exc:  # noqa: BLE001
+        client.metrics.record_failure("align_failed", str(exc))
+        return doc
+
+
+def run_pipeline(
+    video_file: Path, frame_interval_s: float = config.FRAME_INTERVAL_S, *, use_screen: bool = False
+) -> RunArtifacts:
     """Phase 1+2: audio extraction -> STT -> Writer -> Reviewer -> sop_draft.md. Checker (Phase 3)
     is not implemented yet; frame_interval_s is accepted for API compatibility with the Streamlit
     UI and future phases but is currently only used for the sparse frame pass, which nothing
@@ -420,13 +557,16 @@ def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERV
     # Set before any LLM call happens so every call from here on appends to the trace immediately
     # (crash-safe) rather than only being visible if the run makes it to persist_run_json at the end.
     metrics.trace_path = run_dir / "trace.jsonl"
+    metrics.run_id = run_dir.name
     local_video = run_dir / "video.mp4"
     shutil.copy(video_file, local_video)
     audio_path = run_dir / "audio.wav"
+    storage.save_json(build_manifest(local_video), run_dir / "manifest.json")
 
     try:
-        video_io.extract_audio(local_video, audio_path)
-        segments_raw = _transcribe(client, audio_path)
+        with metrics.stage("transcribe"):
+            video_io.extract_audio(local_video, audio_path)
+            segments_raw = _transcribe(client, audio_path)
 
         transcript = [
             TranscriptSegment(
@@ -451,18 +591,34 @@ def run_pipeline(video_file: Path, frame_interval_s: float = config.FRAME_INTERV
                 meta={"segment_count": len(segments_raw)},
             )
 
-        sop = _write_sop(client, run_dir.name, segments_raw)
+        with metrics.stage("writer"):
+            sop = _write_sop(client, run_dir.name, segments_raw)
         if timing_degraded:
             sop = sop.model_copy(update={"timing_degraded": True})
 
-        sop = _review_sop(client, sop, segments_raw)
+        with metrics.stage("reviewer"):
+            sop = _review_sop(client, sop, segments_raw)
+
+        # v3 (docs/22), opt-in: screen timeline + Align. Off by default so run_pipeline stays
+        # byte-identical to v2 for every existing caller.
+        timeline = None
+        if use_screen and not timing_degraded:
+            with metrics.stage("screen"):
+                timeline = _screen_stage(client, run_dir, local_video)
+            if timeline is not None:
+                with metrics.stage("align"):
+                    sop = _align_stage(client, run_dir, sop, timeline, transcript)
 
         sop_draft_path = sop_render.write_sop(
             sop, run_dir, video_name=video_file.name, filename="sop_draft.md"
         )
 
         checker_frames_dir = run_dir / "checker_frames"
-        sop = _run_checker(client, sop, transcript, local_video, checker_frames_dir)
+        with metrics.stage("checker"):
+            sop = _run_checker(
+                client, sop, transcript, local_video, checker_frames_dir,
+                timeline=timeline, timeline_dir=run_dir / "screen", ocr=get_ocr() if timeline is not None else None,
+            )
 
         sop_md_path = sop_render.write_sop(sop, run_dir, video_name=video_file.name, filename="sop.md")
         sop_render.write_sop_json(sop, run_dir)

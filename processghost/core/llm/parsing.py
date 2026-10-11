@@ -191,6 +191,7 @@ def merge_reviewer_output(
                 severity="blocking",
                 window_segment_ids=window,
                 between_step_ids=(from_id, to_id),
+                origin="coverage",
             )
         )
         next_flag_num += 1

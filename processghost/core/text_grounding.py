@@ -47,3 +47,23 @@ def shares_distinctive_token(a: str, b: str) -> bool:
     tokens_a = {t for t in re.split(r"[^a-z0-9]+", a.lower()) if len(t) >= 4 and t not in _STOPWORDS}
     tokens_b = {t for t in re.split(r"[^a-z0-9]+", b.lower()) if len(t) >= 4 and t not in _STOPWORDS}
     return bool(tokens_a & tokens_b)
+
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_ECHO_STOP = _STOPWORDS | {"step", "shows", "visible", "screen", "sheet", "image", "tile"}
+
+
+def content_words(text: str) -> set:
+    return {w for w in _WORD_RE.findall(normalize_for_quote_match(text)) if len(w) >= 4 and w not in _ECHO_STOP}
+
+
+def echo_score(observed: str, prompt_text: str) -> float | None:
+    """Share of `observed`'s content words that already appear in `prompt_text`. A high score means
+    an "observation" was lifted from the prompt (step text, transcript, question) instead of read off
+    the evidence -- see docs/18-known-gaps-v2.md entry 5. None when `observed` has no content words.
+    A lexical proxy: it cannot prove an answer wrong, only that it adds nothing the model was not
+    already told."""
+    words = content_words(observed)
+    if not words:
+        return None
+    return len(words & content_words(prompt_text)) / len(words)

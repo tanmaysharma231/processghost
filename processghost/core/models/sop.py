@@ -23,6 +23,8 @@ Family = Literal["ambiguity", "structural"]
 Severity = Literal["blocking", "caution", "note"]
 Status = Literal["open", "resolved", "contradicted", "unresolvable", "unchecked", "check_failed"]
 Verdict = Literal["resolved", "contradicted", "unresolvable"]
+Origin = Literal["reviewer", "coverage", "screen"]
+CheckerTier = Literal["ocr", "vision", "fallback_frames"]
 
 
 class Attribution(BaseModel):
@@ -102,6 +104,11 @@ class Flag(BaseModel):
     step_id: Optional[str] = None
     between_step_ids: Optional[tuple[str, str]] = None
     status: Status = "open"
+    # v3 additions (docs/22): all optional so v2 documents and build_spec consumers are unaffected.
+    origin: Origin = "reviewer"  # which stage created the flag
+    event_ids: List[str] = Field(default_factory=list)  # screen events attached as Checker evidence
+    checker_tier: Optional[CheckerTier] = None  # which evidence path produced the verdict
+    expansion_level: Optional[int] = None  # 0 or 1: the Checker level that reached the final verdict
 
 
 class FrameDescription(BaseModel):
@@ -193,7 +200,13 @@ def provenance_violations(doc: "SOPDocument") -> List[str]:
     return violations
 
 
+# Version of the sop.json / build_spec.json output contract. Bump the major number when a field
+# is removed or changes meaning; adding optional fields does not require a bump.
+SCHEMA_VERSION = "3.0"
+
+
 class SOPDocument(BaseModel):
+    schema_version: str = SCHEMA_VERSION
     run_id: str
     steps: List[SOPStep] = Field(default_factory=list)
     transitions: List[StepTransition] = Field(default_factory=list)

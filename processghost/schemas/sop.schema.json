@@ -1,0 +1,530 @@
+{
+  "$defs": {
+    "AppendixSegment": {
+      "description": "A transcript segment the Writer judged non-actionable (small talk, a pause, an aside) --\nlisted here rather than silently dropped, so every input segment is accounted for somewhere.",
+      "properties": {
+        "segment_id": {
+          "title": "Segment Id",
+          "type": "integer"
+        },
+        "t_s": {
+          "title": "T S",
+          "type": "number"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "segment_id",
+        "t_s",
+        "text"
+      ],
+      "title": "AppendixSegment",
+      "type": "object"
+    },
+    "Attribution": {
+      "description": "One `[said @t]` tag on a step -- which transcript segment(s) it came from.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "said",
+            "inferred"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "t_s": {
+          "title": "T S",
+          "type": "number"
+        },
+        "segment_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Segment Ids",
+          "type": "array"
+        },
+        "frame_paths": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "title": "Frame Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "t_s"
+      ],
+      "title": "Attribution",
+      "type": "object"
+    },
+    "Flag": {
+      "description": "A Reviewer (Phase 2) annotation: an ambiguity or suspected structural gap, with a window the\nChecker (Phase 3) will later resolve against frames.",
+      "properties": {
+        "flag_id": {
+          "title": "Flag Id",
+          "type": "string"
+        },
+        "family": {
+          "enum": [
+            "ambiguity",
+            "structural"
+          ],
+          "title": "Family",
+          "type": "string"
+        },
+        "question": {
+          "title": "Question",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "blocking",
+            "caution",
+            "note"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "window_segment_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Window Segment Ids",
+          "type": "array"
+        },
+        "window_time_range": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Time Range"
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step Id"
+        },
+        "between_step_ids": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Between Step Ids"
+        },
+        "status": {
+          "default": "open",
+          "enum": [
+            "open",
+            "resolved",
+            "contradicted",
+            "unresolvable",
+            "unchecked",
+            "check_failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "origin": {
+          "default": "reviewer",
+          "enum": [
+            "reviewer",
+            "coverage",
+            "screen"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        },
+        "checker_tier": {
+          "anyOf": [
+            {
+              "enum": [
+                "ocr",
+                "vision",
+                "fallback_frames"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checker Tier"
+        },
+        "expansion_level": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expansion Level"
+        }
+      },
+      "required": [
+        "flag_id",
+        "family",
+        "question",
+        "severity"
+      ],
+      "title": "Flag",
+      "type": "object"
+    },
+    "FrameDescription": {
+      "description": "Slimmed ActionToken -- one frame's worth of Checker evidence.",
+      "properties": {
+        "frame_path": {
+          "format": "path",
+          "title": "Frame Path",
+          "type": "string"
+        },
+        "t_s": {
+          "title": "T S",
+          "type": "number"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "app": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "App"
+        },
+        "confidence": {
+          "default": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "frame_path",
+        "t_s"
+      ],
+      "title": "FrameDescription",
+      "type": "object"
+    },
+    "InferredClause": {
+      "description": "One `[inferred from screen @t]` tag, added by the Checker (Phase 3) on a resolved flag.\nKept separate from SOPStep.instruction rather than merged into it, so the narrated text stays\nbyte-stable across runs (the merge is additive, never a rewrite) -- see docs/15.",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "t_s": {
+          "title": "T S",
+          "type": "number"
+        },
+        "frame_paths": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "title": "Frame Paths",
+          "type": "array"
+        },
+        "flag_id": {
+          "title": "Flag Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "t_s",
+        "flag_id"
+      ],
+      "title": "InferredClause",
+      "type": "object"
+    },
+    "Resolution": {
+      "description": "A Checker (Phase 3) verdict for one flag.",
+      "properties": {
+        "flag_id": {
+          "title": "Flag Id",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "resolved",
+            "contradicted",
+            "unresolvable"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "inferred_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inferred Text"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/FrameDescription"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "narration_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narration Version"
+        },
+        "screen_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screen Version"
+        }
+      },
+      "required": [
+        "flag_id",
+        "verdict"
+      ],
+      "title": "Resolution",
+      "type": "object"
+    },
+    "SOPStep": {
+      "properties": {
+        "step_id": {
+          "title": "Step Id",
+          "type": "string"
+        },
+        "order": {
+          "title": "Order",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "instruction": {
+          "title": "Instruction",
+          "type": "string"
+        },
+        "attributions": {
+          "items": {
+            "$ref": "#/$defs/Attribution"
+          },
+          "title": "Attributions",
+          "type": "array"
+        },
+        "inferred_clauses": {
+          "items": {
+            "$ref": "#/$defs/InferredClause"
+          },
+          "title": "Inferred Clauses",
+          "type": "array"
+        },
+        "flag_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Flag Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "step_id",
+        "order",
+        "title",
+        "instruction"
+      ],
+      "title": "SOPStep",
+      "type": "object"
+    },
+    "StepTransition": {
+      "description": "A Reviewer (Phase 2) claim that one step's outcome carries into the next step's start.\nEmitted ONLY when the Reviewer can honestly name what carries across -- there is no boolean\n\"ok\" field and no way to mark a transition broken. A consecutive step pair with no\nStepTransition between them is how a structural gap is detected: by omission, checked\ndeterministically in core.llm.parsing (coverage check), not by self-report. See\ndocs/14-writer-reviewer-checker.md and the v2 plan for why self-report was rejected -- a model\nasked \"is this ok?\" is strongly biased toward saying yes.\n\n`quote` grounds `carries` in something checkable: the verbatim transcript span that\nestablishes the connection. merge_reviewer_output (core/llm/parsing.py) verifies the quote\nactually occurs in the transcript before counting the pair as covered -- a model that\ngenuinely cannot bridge a pair cannot produce a real quote, so a fabricated `carries` with an\ninvented or absent quote is caught deterministically rather than trusted. See\ndocs/18-known-gaps-v2.md entry 1 for why omission alone (no quote requirement) proved unstable\nin practice.",
+      "properties": {
+        "from_step_id": {
+          "title": "From Step Id",
+          "type": "string"
+        },
+        "to_step_id": {
+          "title": "To Step Id",
+          "type": "string"
+        },
+        "carries": {
+          "minLength": 1,
+          "title": "Carries",
+          "type": "string"
+        },
+        "quote": {
+          "minLength": 1,
+          "title": "Quote",
+          "type": "string"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Condition"
+        }
+      },
+      "required": [
+        "from_step_id",
+        "to_step_id",
+        "carries",
+        "quote"
+      ],
+      "title": "StepTransition",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": "3.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/SOPStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "transitions": {
+      "items": {
+        "$ref": "#/$defs/StepTransition"
+      },
+      "title": "Transitions",
+      "type": "array"
+    },
+    "flags": {
+      "items": {
+        "$ref": "#/$defs/Flag"
+      },
+      "title": "Flags",
+      "type": "array"
+    },
+    "resolutions": {
+      "items": {
+        "$ref": "#/$defs/Resolution"
+      },
+      "title": "Resolutions",
+      "type": "array"
+    },
+    "appendix_segments": {
+      "items": {
+        "$ref": "#/$defs/AppendixSegment"
+      },
+      "title": "Appendix Segments",
+      "type": "array"
+    },
+    "review_failed": {
+      "default": false,
+      "title": "Review Failed",
+      "type": "boolean"
+    },
+    "timing_degraded": {
+      "default": false,
+      "title": "Timing Degraded",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "SOPDocument",
+  "type": "object"
+}

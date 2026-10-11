@@ -45,10 +45,11 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel
 from sarvamai import SarvamAI
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core import config
+from core.llm import cache
 from core.llm.client import Metrics
+from core.llm.retry import StructuredOutputError, llm_retry
 
 
 def _load_client() -> SarvamAI:
@@ -63,7 +64,7 @@ class SarvamClient:
 
     # --- chat (intent extraction, cross-check, action-from-OCR-text) --------
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @llm_retry()
     def chat(self, messages: list[dict], model: Optional[str] = None, stage: str = "unknown", **kwargs) -> Dict[str, Any]:
         model_name = model or config.SARVAM_MODEL_CHAT
         # No response_format param on this SDK's chat.completions -- see module docstring. Any
@@ -104,6 +105,15 @@ class SarvamClient:
         """
         from core.llm.parsing import extract_chat_content  # local import: avoid a cycle at module load
 
+        model_name = model or config.SARVAM_MODEL_CHAT
+        key = cache.make_key("structured", "sarvam", model_name, system_prompt, user_text, schema.__name__, schema.model_json_schema())
+        hit = cache.get("structured", key)
+        if hit is not None:
+            parsed = schema.model_validate(hit)
+            self.metrics.add({}, model_name, stage=stage, latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
+            self.metrics.record_payload(stage, {**(payload_extra or {}), **parsed.model_dump(mode="json")})
+            return parsed
+
         response = self.chat(
             [
                 {"role": "system", "content": system_prompt},
@@ -116,11 +126,12 @@ class SarvamClient:
         try:
             parsed = schema.model_validate(json.loads(content))
         except (json.JSONDecodeError, ValueError) as exc:
-            raise RuntimeError(f"structured output did not match {schema.__name__}: {exc}") from exc
+            raise StructuredOutputError(f"structured output did not match {schema.__name__}: {exc}") from exc
         # Same trace-payload mechanism as LLMClient.structured_chat (core/llm/client.py) -- a
         # separate trace line, not folded into self.chat's own metrics.add call above, so
         # cost/token accounting there is never at risk of being duplicated.
         payload = parsed.model_dump(mode="json")
+        cache.put("structured", key, payload)
         if payload_extra:
             payload = {**payload_extra, **payload}
         self.metrics.record_payload(stage, payload)
@@ -210,7 +221,7 @@ class SarvamClient:
 
     # --- text-to-speech (Bulbul) --------------------------------------------
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @llm_retry()
     def text_to_speech(
         self,
         text: str,

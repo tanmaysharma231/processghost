@@ -26,8 +26,10 @@ Four stages, all producing one validated `SOPDocument`:
    runs, see docs/18-known-gaps-v2.md]
 3. **Checker** takes each flag and checks it against real video frames (OpenAI vision, or one OCR
    pass plus text reasoning with Sarvam). It writes down what it literally observes before giving a
-   verdict: resolved, contradicted or unresolvable. [partial: the frame approach is under review and
-   deferred; the Sarvam path has never run against the real API]
+   verdict: resolved, contradicted or unresolvable. [partial: v2 frame path built; an opt-in v3 path
+   (`--screen`) works from screen-change events with OCR text first and vision only on escalation,
+   built and run once on the one clip at about $0.14 per run with no failed flags, but some "resolved"
+   answers are too generic; the Sarvam path has never run against the real API]
 4. **Triage** is a pure function of status and severity, with no LLM call. It writes `sop.md` and a
    severity-sorted `build_spec.json` escalation queue. [built]
 
@@ -63,8 +65,8 @@ become open questionnaire items, each with a frame, timestamp and status.
   allowed to say it can't tell. A confident wrong resolution is worse than an open flag. [built]
 - **It needs no system access.** It works from a recording, so it adds value in the weeks while
   access is still being granted. Where access exists later, flags tell an agent where to look.
-- **Cost has a ceiling, not a cap that has been exercised.** The Checker's per-flag vision calls
-  dominate (about $0.04 to $0.06 each). `MAX_CHECKED_FLAGS=20` limits flags per run, but it has
+- **Cost has a ceiling, not a cap that has been exercised.** In v2 the Checker's per-flag vision calls
+  dominated (about $0.04 to $0.06 each); the v3 path measured about $0.015 per flag on one run. `MAX_CHECKED_FLAGS=20` limits flags per run, but it has
   never once bound in a real run, so the claim is untested. Every call is logged in `trace.jsonl`.
   [partial]
 
@@ -73,7 +75,12 @@ become open questionnaire items, each with a frame, timestamp and status.
 - Built and verified on one 24-second scenario (a recording plus a bills-tracker workbook).
 - Reviewer flag count varies between runs. Results should be reported as a range over repeated
   runs, not a single number. No harness reports this yet. [planned: eval harness]
-- Checker approach (frame windows, vision, OCR fallback) under review. [deferred]
+- Screen timeline (pixel-diff change events) [built, one clip]. Align's silent-step detection
+  [built, found nothing on the one clip, so unproven]. Eval labels for the screen events are drafts,
+  not confirmed by a person.
+- Idempotent reruns (content-addressed cache, verified: second identical run cost $0 and gave the
+  same output), single transient-only retry layer, run manifest, `schema_version` and JSON Schemas on
+  the outputs. [built]
 - Not yet tested on long calls (20 to 30 minutes) or multiple speakers.
 - Logic that is neither spoken nor visible, such as a long SQL query behind a button, is out of
   reach by design. Flags point to it but cannot resolve it.

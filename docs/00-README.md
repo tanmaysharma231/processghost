@@ -56,6 +56,15 @@ Recorded here because they shape every document below and were made explicitly, 
 | Doc | Hook |
 |---|---|
 | `21-pipeline-reference.md` | The whole run in one place: each stage's job, inputs, outputs, failure behavior and prompt (copied verbatim in an appendix), plus triage rules and the files a run produces. |
+| `22-architecture-v3.md` | v3 design: independent screen timeline (built), Align for unspoken steps and a cheaper change-driven Checker (not built), 20 decisions with rejected alternatives, data contracts, measured worked example, roadmap with exit checks. |
+| `23-checker-learnings.md` | What the v2 Checker was sent and said, measured by replaying five real runs: two thirds of sampled frames carried no change, a sheet switch is only ~10.8% of pixels, and the model often echoes the prompt. Evidence behind the v3 design. |
+
+### Decisions and limits
+
+| Doc | Hook |
+|---|---|
+| `scope-and-limits.md` | What ProcessGhost deliberately does not do, and the known gaps (one clip, no web screens, Reviewer variance, weak resolved answers). |
+| `adr/` | Nine short decision records: what was chosen, why, what was rejected, and whether it is built, planned or open. |
 
 ### Fit notes
 

@@ -1,0 +1,20 @@
+{
+  "video": "../../../../data/english_hackathon_test.mp4",
+  "note": "DRAFT labels written from the keyframes of the first detector run, so they CANNOT validate recall -- they were read off the same frames the detector flagged. A human must watch the full video, correct times/types, add any missed on-screen actions, and set confirmed=true. Only confirmed labels count for --confirmed-only.",
+  "events": [
+    {"label_id": "L1", "t_start": 2.8, "t_end": 3.3, "type": "local", "spoken": "vague", "confirmed": false,
+     "description": "A cell/row is selected on the first sheet while the speaker says 'master files here'."},
+    {"label_id": "L2", "t_start": 4.2, "t_end": 5.4, "type": "scene_cut", "spoken": "explained", "confirmed": false,
+     "description": "Switch to the Monthly Actuals sheet ('go to monthly actions')."},
+    {"label_id": "L3", "t_start": 6.2, "t_end": 6.6, "type": "local", "spoken": "vague", "confirmed": false,
+     "description": "Selection moves on Monthly Actuals ('fill the actualization')."},
+    {"label_id": "L4", "t_start": 8.2, "t_end": 8.6, "type": "local", "spoken": "no", "confirmed": false,
+     "description": "A further selection/highlight change on Monthly Actuals that nothing in the narration names."},
+    {"label_id": "L5", "t_start": 9.6, "t_end": 10.2, "type": "scene_cut", "spoken": "vague", "confirmed": false,
+     "description": "Switch to the Transactions sheet and copy one cell (dashed copy border visible by 10.5s). Two actions inside one second."},
+    {"label_id": "L6", "t_start": 15.9, "t_end": 16.5, "type": "scene_cut", "spoken": "explained", "confirmed": false,
+     "description": "Switch back to Monthly Actuals ('go to monthly actions')."},
+    {"label_id": "L7", "t_start": 18.2, "t_end": 18.5, "type": "local", "spoken": "vague", "confirmed": false,
+     "description": "Value pasted into one cell; totals elsewhere on the sheet change ('paste it here', 'total updated automatically')."}
+  ]
+}

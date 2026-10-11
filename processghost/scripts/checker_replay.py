@@ -16,7 +16,6 @@ import argparse
 import html
 import json
 import math
-import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -28,20 +27,10 @@ from core.models.sop import Flag, SOPDocument
 from core.models.tokens import TranscriptSegment
 from core.pipeline import _flag_step_excerpt, _flag_transcript_excerpt, _flag_window_s
 from core.screen.diff import diff_boxes
-from core.text_grounding import normalize_for_quote_match
+from core.text_grounding import content_words, echo_score
 
 THUMB_WIDTH = 360
 _SEVERITY_ORDER = {"blocking": 0, "caution": 1, "note": 2}
-_WORD_RE = re.compile(r"[a-z0-9]+")
-_STOP = {
-    "this", "that", "these", "those", "with", "from", "into", "then", "than", "when", "what", "where",
-    "which", "while", "will", "would", "could", "should", "there", "here", "have", "been", "were",
-    "does", "each", "some", "such", "step", "shows", "visible", "screen", "sheet",
-}
-
-
-def _content_words(text: str) -> set:
-    return {w for w in _WORD_RE.findall(normalize_for_quote_match(text)) if len(w) >= 4 and w not in _STOP}
 
 
 def _load_trace_answers(trace_path: Path, checked: List[Flag]) -> Dict[str, dict]:
@@ -143,8 +132,7 @@ def _replay_run(run_dir: Path) -> dict:
         ans = answers.get(flag.flag_id, {})
         payload = ans.get("payload") or {}
         observed = payload.get("observed", "")
-        obs_words = _content_words(observed)
-        echo = (len(obs_words & _content_words(context)) / len(obs_words)) if obs_words else None
+        echo = echo_score(observed, context)
         diffs = [f for f in frames_out if f["identical"] is not None]
         cards.append(
             {
@@ -163,7 +151,7 @@ def _replay_run(run_dir: Path) -> dict:
                 "reason": payload.get("reason"),
                 "error": ans.get("error"),
                 "echo_score": None if echo is None else round(echo, 2),
-                "new_words": sorted(obs_words - _content_words(context)),
+                "new_words": sorted(content_words(observed) - content_words(context)),
             }
         )
     result = {"run_id": run_dir.name, "flags": cards}

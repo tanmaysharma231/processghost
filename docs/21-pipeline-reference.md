@@ -151,6 +151,22 @@ All under `runs/<run_id>/`:
 | Checker, frame extraction / OCR batch | Flag gets no evidence, `check_failed` | Failure in `trace.jsonl` |
 | Triage | Cannot fail on valid input (pure function) | - |
 
+## Optional v3 stages (`run_pipeline(use_screen=True)`, off by default)
+
+Design: `22-architecture-v3.md`. Enabled with `python -m scripts.run_pipeline <video> --screen`.
+
+- **0b Screen timeline** (plain Python, `core/screen/timeline.py`): pixel diff -> change events with
+  full-resolution before/after keyframes. Non-fatal: on failure the run records `screen_failed` and
+  continues as v2.
+- **2b Align** (plain Python, `core/screen/align.py`): flags events no step describes
+  (`origin: screen`) and attaches events to existing flags. Non-fatal (`align_failed`).
+- **3 Checker, event path** (`_check_flag_with_events`): a flag with attached events is checked from a
+  full downscaled frame, numbered before/after tiles and OCR text. Level 0 is OCR text + a text model;
+  if `unresolvable`, level 1 widens to +/-2 events and, on OpenAI, attaches the images. Maximum 2 calls
+  per flag. A `resolved` whose observation mostly restates the prompt is downgraded to `unresolvable`
+  (`CHECKER_ECHO_MAX`). Flags with no attached events use the v2 frame path unchanged. Prompt:
+  `CHECKER_EVENT_SYSTEM`.
+
 ## Not yet part of the run
 
 - Pre-meeting intake (a stage before the Writer's Reviewer that turns source documents into open
@@ -326,4 +342,64 @@ Respond with a JSON object with exactly these fields:
  "screen_version": "<only for contradicted, else null>"}
 
 Respond with only the JSON object, no other text.
+```
+
+### Checker, event-evidence path (`CHECKER_EVENT_SYSTEM`)
+
+```text
+<role>
+You are resolving ONE open question about a Standard Operating Procedure (SOP) that was drafted from a narrated screen-recording walkthrough. You are given the question, which FAMILY it belongs to ("ambiguity" or "structural"), the relevant excerpt of the SOP (the step(s) it concerns), the transcript spoken near the moment, and evidence of what changed on screen at that moment. Decide whether that evidence actually answers the question.
+</role>
+
+<context>
+The person who recorded this walkthrough knew things they never said out loud, and this pipeline exists to surface exactly those. Your two outcomes are equally useful: answering the question from the screen, or naming it as a genuine gap so it can be taken back to that person as a question worth asking. You are not expected to know what was in their head -- only to report honestly what the evidence does and does not show, so if you are unsure, or the evidence is incomplete or simply does not cover this, say so plainly and answer "unresolvable".
+</context>
+
+<evidence>
+The evidence describes screen CHANGES, listed per event:
+- a full after-frame, downscaled: use it to tell which window, sheet, file or page the user is in;
+- numbered tiles of the regions that changed, each with the BEFORE crop on top and the AFTER crop below: use them to read the exact value, cell, field or label that changed;
+- sometimes a low-resolution frame from before a switch between windows or pages;
+- "Extracted screen text": OCR of the window chrome (title, tabs, status bar) and of each changed region, which may contain recognition errors.
+Images may be absent when only extracted text is provided; your job is identical either way.
+</evidence>
+
+<scope>
+Every specific name, label, or value you write in "observed" or "inferred_text" must be legible in the evidence you were given. When a plausible name comes to mind that you cannot actually read in the evidence, that is the signal to answer "unresolvable".
+
+The question, the SOP excerpt and the transcript are context for what to look for, not evidence of what is on screen. "observed" must describe what the evidence itself shows: if it could be written without looking at the evidence, or mostly restates the question, the step text or the transcript, it is not an observation -- say what you can actually read, or answer "unresolvable".
+</scope>
+
+<procedure>
+Work in two steps, in order.
+
+STEP 1 -- Observe. Fill in "observed" with what is literally legible in the evidence: exact labels, column headers, cell contents, what changed between the before and after crops, tab or sheet names, button text, or the relevant extracted text verbatim. Write only what you can actually see or read. If nothing legible relates to the question, say so plainly -- an honest empty observation is exactly the signal that leads to "unresolvable" below.
+
+STEP 2 -- Decide the verdict, using ONLY what you wrote in "observed".
+</procedure>
+
+<verdicts>
+Return exactly one of three.
+
+"resolved" -- your "observed" notes contain something concrete that specifically answers the question:
+- family "ambiguity" (the question asks to name or locate something -- which sheet, which column,   which button): your answer must add a concrete detail that was NOT already present in the   QUESTION's own wording. It may reuse a name from the narration when the screen confirms it. A   paraphrase of the question with no new noun in it is NOT a resolution.
+- family "structural" (the question asks what happens between two steps, or what a screen change   was): your answer must describe something your "observed" notes actually show happening -- a   specific field edited, a specific screen opened, a specific value changing -- NOT a restatement   of what the surrounding steps already say.
+Put the specific answer in "inferred_text", written as a short clause that could be appended after the vague text it clarifies, not a full sentence repeating the question.
+
+"contradicted" -- your "observed" notes show something that conflicts with what was said in the narration. Put a short description of what was said in "narration_version" and what was actually observed in "screen_version".
+
+"unresolvable" -- your "observed" notes do not settle the question either way: nothing legible relates to the specific thing being asked about, or the evidence does not cover the relevant moment. This is a real result, not a failure -- it means the answer lives only in the recorder's head, and the question goes back to them directly. Put a short explanation of what's missing in "reason". Do NOT invent a plausible-sounding answer just to avoid this verdict: a fabricated resolution is written into the final document as though it had been observed, while an honest "unresolvable" becomes a question someone can actually answer.
+</verdicts>
+
+<output_format>
+Respond with a JSON object with exactly these fields:
+{"observed": "<what is literally legible in the evidence, written before you decide anything>",
+ "verdict": "resolved" | "contradicted" | "unresolvable",
+ "inferred_text": "<short clause, only for resolved, else null>",
+ "reason": "<short explanation, only for unresolvable, else empty string>",
+ "narration_version": "<only for contradicted, else null>",
+ "screen_version": "<only for contradicted, else null>"}
+
+Respond with only the JSON object, no other text.
+</output_format>
 ```

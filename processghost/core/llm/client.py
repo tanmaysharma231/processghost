@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Type
@@ -21,9 +22,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from core import config
+from core.llm import cache
+from core.llm.retry import StructuredOutputError, llm_retry
 from core.io.images import frame_to_data_uri
 from core.io.storage import save_json
 
@@ -62,6 +64,9 @@ class Metrics:
         # tool without parsing run.json's nested structure. None until then; add()/record_failure()
         # simply skip the file write in that case.
         self.trace_path: Optional[Path] = trace_path
+        # Stamped on every trace line (set by run_pipeline) so lines from different runs can be
+        # concatenated and still told apart.
+        self.run_id: Optional[str] = None
 
     def add(
         self,
@@ -137,9 +142,33 @@ class Metrics:
         self.failures.append(entry)
         self._write_trace_line(entry)
 
+    @contextmanager
+    def stage(self, name: str):
+        """Bracket a pipeline stage with stage_start / stage_end trace events (the end event carries
+        duration and whether the stage raised), so where a run's time went and where it stopped are
+        readable from trace.jsonl alone."""
+        t0 = time.monotonic()
+        self._write_trace_line({"timestamp": datetime.utcnow().isoformat(), "event": "stage_start", "stage": name})
+        ok = False
+        try:
+            yield
+            ok = True
+        finally:
+            self._write_trace_line(
+                {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "event": "stage_end",
+                    "stage": name,
+                    "duration_s": round(time.monotonic() - t0, 3),
+                    "ok": ok,
+                }
+            )
+
     def _write_trace_line(self, event: dict) -> None:
         if self.trace_path is None:
             return
+        if self.run_id is not None:
+            event = {"run_id": self.run_id, **event}
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
         with self.trace_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, default=str) + "\n")
@@ -159,9 +188,14 @@ class LLMClient:
         self.client = _load_client()
         self.metrics = metrics or Metrics()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @llm_retry()
     def transcribe(self, audio_path: Path, model: str | None = None) -> Dict[str, Any]:
         model_name = model or config.MODEL_WHISPER
+        key = cache.make_key("transcribe", "openai", model_name, files=[audio_path])
+        hit = cache.get("transcribe", key)
+        if hit is not None:
+            self.metrics.add({}, model_name, stage="transcribe", latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
+            return hit
         t0 = time.monotonic()
         with audio_path.open("rb") as f:
             resp = self.client.audio.transcriptions.create(model=model_name, file=f, response_format="verbose_json")
@@ -180,9 +214,10 @@ class LLMClient:
             meta={"duration_s": duration_s},
             cost_usd_override=cost_usd,
         )
+        cache.put("transcribe", key, resp_dict)
         return resp_dict
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @llm_retry()
     def chat(self, messages: list[dict], model: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         model_name = model or config.MODEL_TEXT
         t0 = time.monotonic()
@@ -192,7 +227,7 @@ class LLMClient:
         self.metrics.add(usage or {}, model_name, stage="legacy_chat", latency_ms=latency_ms)
         return resp.dict()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @llm_retry()
     def vision(self, messages: list[dict], model: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         model_name = model or config.MODEL_VISION
         t0 = time.monotonic()
@@ -202,7 +237,7 @@ class LLMClient:
         self.metrics.add(usage or {}, model_name, stage="legacy_vision", latency_ms=latency_ms)
         return resp.dict()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @llm_retry()
     def structured_chat(
         self,
         system_prompt: str,
@@ -248,16 +283,29 @@ class LLMClient:
             _, _, b64 = data_uri.partition(",")
             content.append({"type": "image", "base64": b64, "mime_type": "image/png"})
 
+        key = cache.make_key(
+            "structured", "openai", model_name, system_prompt, user_text, schema.__name__,
+            schema.model_json_schema(), config.LLM_TEMPERATURE, files=images or [],
+        )
+        hit = cache.get("structured", key)
+        if hit is not None:
+            parsed = schema.model_validate(hit)
+            self.metrics.add({}, model_name, stage=stage, latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
+            self.metrics.record_payload(stage, {**(payload_extra or {}), **parsed.model_dump(mode="json")})
+            return parsed
+
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=content)]
+        # max_retries=0: core/llm/retry.py owns retrying, so one call is never retried by two layers.
         chat_model = ChatOpenAI(
-            model=model_name, api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE") or None
+            model=model_name, api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE") or None,
+            temperature=config.LLM_TEMPERATURE, max_retries=0,
         ).with_structured_output(schema, method="json_schema", include_raw=True)
 
         t0 = time.monotonic()
         result = chat_model.invoke(messages)
         latency_ms = (time.monotonic() - t0) * 1000
         if result.get("parsing_error") is not None:
-            raise RuntimeError(f"structured output did not match {schema.__name__}: {result['parsing_error']}")
+            raise StructuredOutputError(f"structured output did not match {schema.__name__}: {result['parsing_error']}")
 
         raw = result["raw"]
         usage_metadata = getattr(raw, "usage_metadata", None) or {}
@@ -273,6 +321,7 @@ class LLMClient:
         )
         parsed = result["parsed"]
         payload = parsed.model_dump(mode="json")
+        cache.put("structured", key, payload)
         if payload_extra:
             payload = {**payload_extra, **payload}
         self.metrics.record_payload(stage, payload)

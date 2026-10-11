@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List
 
 from core.io.storage import save_json
-from core.models.sop import Flag, SOPDocument
+from core.models.sop import SCHEMA_VERSION, Flag, SOPDocument
 
 PROCEED_WITH_ASSUMPTION = "proceed_with_assumption"
 PROCEED_WITH_FLAG = "proceed_with_flag"
@@ -62,6 +62,9 @@ def build_spec(doc: SOPDocument) -> dict:
             "between_step_ids": flag.between_step_ids,
             "window_segment_ids": flag.window_segment_ids,
             "window_time_range": flag.window_time_range,
+            "origin": flag.origin,
+            "event_ids": flag.event_ids,
+            "checker_tier": flag.checker_tier,
             "triage": triage,
         }
         flags_out.append(entry)
@@ -71,6 +74,7 @@ def build_spec(doc: SOPDocument) -> dict:
     escalation_queue.sort(key=lambda e: _SEVERITY_ORDER.get(e["severity"], 3))
 
     return {
+        "schema_version": SCHEMA_VERSION,
         "run_id": doc.run_id,
         "steps": [s.model_dump() for s in sorted(doc.steps, key=lambda s: s.order)],
         "flags": flags_out,

@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "Scene": {
+      "properties": {
+        "scene_id": {
+          "title": "Scene Id",
+          "type": "string"
+        },
+        "t_start": {
+          "title": "T Start",
+          "type": "number"
+        },
+        "t_end": {
+          "title": "T End",
+          "type": "number"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scene_id",
+        "t_start",
+        "t_end"
+      ],
+      "title": "Scene",
+      "type": "object"
+    },
+    "ScreenEvent": {
+      "properties": {
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "t_start": {
+          "title": "T Start",
+          "type": "number"
+        },
+        "t_end": {
+          "title": "T End",
+          "type": "number"
+        },
+        "type": {
+          "enum": [
+            "local",
+            "large_shift",
+            "scene_cut"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "changed_pct": {
+          "title": "Changed Pct",
+          "type": "number"
+        },
+        "coverage_pct": {
+          "title": "Coverage Pct",
+          "type": "number"
+        },
+        "bboxes": {
+          "items": {
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Bboxes",
+          "type": "array"
+        },
+        "before_frame": {
+          "title": "Before Frame",
+          "type": "string"
+        },
+        "after_frame": {
+          "title": "After Frame",
+          "type": "string"
+        },
+        "scene_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scene Label"
+        }
+      },
+      "required": [
+        "event_id",
+        "t_start",
+        "t_end",
+        "type",
+        "changed_pct",
+        "coverage_pct",
+        "before_frame",
+        "after_frame"
+      ],
+      "title": "ScreenEvent",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "video": {
+      "title": "Video",
+      "type": "string"
+    },
+    "duration_s": {
+      "title": "Duration S",
+      "type": "number"
+    },
+    "width": {
+      "title": "Width",
+      "type": "integer"
+    },
+    "height": {
+      "title": "Height",
+      "type": "integer"
+    },
+    "params": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Params",
+      "type": "object"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/ScreenEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "scenes": {
+      "items": {
+        "$ref": "#/$defs/Scene"
+      },
+      "title": "Scenes",
+      "type": "array"
+    },
+    "activity": {
+      "items": {
+        "maxItems": 3,
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "integer"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Activity",
+      "type": "array"
+    }
+  },
+  "required": [
+    "video",
+    "duration_s",
+    "width",
+    "height"
+  ],
+  "title": "ScreenTimeline",
+  "type": "object"
+}
