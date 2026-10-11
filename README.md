@@ -46,6 +46,11 @@ Full stage reference with the prompts: `docs/21-pipeline-reference.md`.
 - Silent-step detection (a step on screen that is never spoken) is built but has not yet found one
   on real data.
 - The eval labels in `processghost/evals/` are drafts and unconfirmed.
+- Scored against the six findings the real scenario requires (`docs/12`), existing runs surface 0 to 3
+  of 6 (the three sheet names at best), never the row-matching rule, the target column or the Status
+  requirement. A Reconciler that checks every step against what changed on screen is built (`docs/24`),
+  but one real run scored 2 of 6; a fuller measurement is pending. Run
+  `python -m evals.score_findings` to score output.
 
 Everything above is expanded in `docs/scope-and-limits.md`.
 

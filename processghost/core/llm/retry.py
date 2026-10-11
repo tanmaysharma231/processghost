@@ -39,7 +39,14 @@ _TRANSIENT = (
 )
 
 
+# A 429 that no amount of waiting fixes: the account is out of credit or at its spending cap. The SDK
+# raises these as RateLimitError, so they must be told apart by error code or they get retried for minutes.
+_NOT_TRANSIENT_CODES = {"insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"}
+
+
 def is_transient(exc: BaseException) -> bool:
+    if getattr(exc, "code", None) in _NOT_TRANSIENT_CODES:
+        return False
     if isinstance(exc, _TRANSIENT):
         return True
     status = getattr(exc, "status_code", None)  # SDKs that do not subclass the openai errors (e.g. Sarvam)

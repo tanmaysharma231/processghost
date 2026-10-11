@@ -67,7 +67,11 @@ def _neighbours(t: float, ordered: List[SOPStep], spans) -> Tuple[Optional[str],
     return (before[-1] if before else None), (after[0] if after else None)
 
 
-def align_events(doc: SOPDocument, events: List[ScreenEvent], transcript: List[TranscriptSegment]) -> AlignResult:
+def align_events(
+    doc: SOPDocument, events: List[ScreenEvent], transcript: List[TranscriptSegment], *, silent_flags: bool = True
+) -> AlignResult:
+    """`silent_flags=False` only attaches events to existing flags: the Reconciler (core/screen/reconcile.py)
+    owns silent-step detection when it runs, and this stays the fallback when it fails."""
     ordered = sorted(doc.steps, key=lambda s: s.order)
     spans = _step_spans(doc, transcript)
 
@@ -79,9 +83,10 @@ def align_events(doc: SOPDocument, events: List[ScreenEvent], transcript: List[T
         owner_of[ev.event_id] = owner
         (owned.setdefault(owner, []) if owner else unowned).append(ev)
 
-    candidates: List[ScreenEvent] = list(unowned)
+    candidates: List[ScreenEvent] = list(unowned) if silent_flags else []
     for evs in owned.values():
-        candidates.extend(evs[config.SCREEN_ALIGN_MAX_EVENTS_PER_STEP :])
+        if silent_flags:
+            candidates.extend(evs[config.SCREEN_ALIGN_MAX_EVENTS_PER_STEP :])
     candidates.sort(key=lambda e: e.t_start)
 
     flags = list(doc.flags)

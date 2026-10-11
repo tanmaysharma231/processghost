@@ -149,6 +149,10 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
             # read identically to a narrated step, which is exactly the ambiguity this section
             # exists to avoid.
             lines.append(f"{step.instruction}  _(not narrated -- see Section 2)_")
+        for oc in step.observed_changes:
+            lines.append(
+                f"- Observed on screen: {oc.text} `[observed @{fmt_ts(oc.t_s)}, {', '.join(oc.event_ids)}]`"
+            )
         lines.append("")
 
     if doc.transitions or any(f.family == "structural" for f in doc.flags):

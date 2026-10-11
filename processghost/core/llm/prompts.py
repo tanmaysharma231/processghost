@@ -17,6 +17,11 @@ Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and docs/14):
   evidence is a full downscaled frame, numbered before/after tiles of what changed, and OCR text,
   and it adds an explicit rule against restating the question/step/transcript as an observation.
 
+- RECONCILER_SYSTEM: narrated steps (with word-timed speech) + one change record per screen event
+  -> for every step, which events realise it and what changed, plus what stays unspecified, which
+  events no step explains, and whether claimed consequences are shown (docs/24). Called once per run
+  on the whole context; every quote it returns is verified in code against the records.
+
 All three are used via structured_chat(...) (core/llm/client.py / core/llm/sarvam_client.py),
 which validates the response against a Pydantic schema (WriterOutput / ReviewerOutput /
 CheckerOutput in core/models/sop.py) -- no hand-rolled JSON parsing at the call site.
@@ -348,6 +353,53 @@ Respond with a JSON object with exactly these fields:
  "reason": "<short explanation, only for unresolvable, else empty string>",
  "narration_version": "<only for contradicted, else null>",
  "screen_version": "<only for contradicted, else null>"}
+
+Respond with only the JSON object, no other text.
+</output_format>"""
+
+
+RECONCILER_SYSTEM = """<role>
+You are reconciling what a person SAID while recording a screen walkthrough with what CHANGED on screen. You receive the narrated steps (with the timed words spoken for each) and a change record for every screen event, extracted from the video by OCR. Decide which events realise which steps, say what changed for each step, and surface what is still unspecified.
+</role>
+
+<context>
+A change record holds OCR text only: the window chrome before and after the change (title, tabs, the cell-reference box and formula bar of a spreadsheet, a URL or breadcrumb of a web page, the status bar) and, for each changed region, the text in it before and after. OCR can drop spaces or misread characters; treat the text as it is written. People often act a few seconds before or after they describe an action, so match events to steps on both the time of the words and the content (a name or value that appears both in the speech and in a record), not time alone. One event can realise more than one step, and one step can need more than one event.
+</context>
+
+<steps>
+For EVERY step, in the order given, produce one entry:
+1. "event_ids": the events that realise this step. Leave it empty when no event shows it.
+2. "what_changed": one or two sentences stating what changed, built only from the text of the \
+records you cite. Say WHERE each change happened -- name the cell reference, field, tab, sheet or \
+page whenever a record shows one -- and WHAT value, label or selection is involved. A change of \
+window or tab alone is the least informative thing a record can show; prefer the cell, field or \
+value that was selected or edited. Choose the event that shows the action itself (a value appearing \
+where something was pasted or typed, a selection moving, a page opening) rather than one that merely \
+happens near it. Leave it empty when no event shows the step. Do not describe anything a record does \
+not contain.
+3. "evidence": for what_changed, one or more quotes, each copied character-for-character from the record text of the event it names ("event_id" and "quote"). Quote short, specific fragments such as a cell reference, a value or a label. A quote that is not literally in that event's record text will be discarded together with the sentence it supports.
+4. "unspecified": questions a newcomer would still need answered after reading what_changed, about what neither the speech nor the records state: why this item was chosen over similar ones, what rule links two places, where a value came from. Do not ask about anything the records already answer. Give each a "severity" of "blocking" (a newcomer would be stopped), "caution" or "note".
+</steps>
+
+<events>
+Also list every event exactly once in "events" with the "step_id" it realises, or null when no narrated step explains it. An event that changes the screen without being described is one of the most useful things to report, so do not force it onto the nearest step.
+</events>
+
+<claims>
+When a step asserts a consequence of an action ("it updates", "it recalculates", "it saves", "that fixes it"), add a "claims" entry with the "step_id", the "claim" in the speaker's words, and "supported": "yes" only if a record shows the thing claimed actually changing (include the quote), "no" if the records show the action but nothing changes in what was claimed, "unclear" if the records cannot tell. A change that sits near the claimed one but is not the thing claimed (for example a running total shown for the current selection, when the claim is about a sheet total) does not support it.
+</claims>
+
+<scope>
+This is scenario-agnostic work: do not invent a sheet, file, column, page or field name, a number, or any other detail that is not literally in the speech or the records.
+</scope>
+
+<output_format>
+Respond with a JSON object with exactly these fields:
+{"steps": [{"step_id": "step-01", "event_ids": ["ev-001"], "what_changed": "<from the records only>",
+            "evidence": [{"event_id": "ev-001", "quote": "<verbatim from that record>"}],
+            "unspecified": [{"question": "<question>", "severity": "caution"}]}],
+ "events": [{"event_id": "ev-001", "step_id": "step-01"}, {"event_id": "ev-002", "step_id": null}],
+ "claims": [{"step_id": "step-03", "claim": "<speaker's words>", "supported": "no", "evidence": []}]}
 
 Respond with only the JSON object, no other text.
 </output_format>"""

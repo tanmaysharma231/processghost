@@ -1,0 +1,26 @@
+{
+  "source": "docs/12-real-scenario-target.md, section 2 (the six things the narration never says) and section 4 (definition of done)",
+  "note": "Each finding passes if ANY group passes; a group passes if EVERY pattern matches within one line of sop.md (case-insensitive). The patterns are scenario facts, so they live here and never in prompts or pipeline code. A pattern hit is evidence that a finding was surfaced, not proof it was surfaced correctly: read the matching lines. 'forbidden' lists claims already seen to be false in real runs.",
+  "findings": [
+    {"id": "G1", "name": "'master files' is the Master Bills sheet", "groups": [[ "master\\s*bills" ]]},
+    {"id": "G2", "name": "'monthly actions' is the Monthly Actuals sheet", "groups": [[ "monthly\\s*actuals" ]]},
+    {"id": "G3", "name": "'transactions' is the Transactions - March sheet", "groups": [[ "transactions[\\s-]*march" ]]},
+    {"id": "G4", "name": "rows are matched by Bill ID, not vendor name", "groups": [
+      [ "bill[\\s-]*id", "match|join|key|link|correspond|same row|find the (right )?row|which row|how .{0,30}row" ]
+    ]},
+    {"id": "G5", "name": "the paste target is column F (Actual)", "groups": [
+      [ "\\bF\\d{1,3}\\b" ],
+      [ "column\\s*F\\b" ],
+      [ "actual\\s*\\(F\\)" ]
+    ]},
+    {"id": "G6", "name": "Status must be 'Paid' for the total to include the row (ideally flagged as unverified)", "groups": [
+      [ "\\bpaid\\b" ],
+      [ "\\bstatus\\b", "total" ]
+    ]}
+  ],
+  "forbidden": [
+    {"pattern": "usage spike", "why": "invented in a real run: a misread of a February row's Expected and Actual values"},
+    {"pattern": "235,?000", "why": "invented in a real run: no event shows any total changing to this value"}
+  ],
+  "completeness_banners": [ "Nothing is missing", "No open questions" ]
+}

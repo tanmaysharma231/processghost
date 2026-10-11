@@ -167,6 +167,12 @@ Design: `22-architecture-v3.md`. Enabled with `python -m scripts.run_pipeline <v
   (`CHECKER_ECHO_MAX`). Flags with no attached events use the v2 frame path unchanged. Prompt:
   `CHECKER_EVENT_SYSTEM`.
 
+- **2c Reconciler** (`core/screen/reconcile.py`, on by default with `--screen`; `--no-reconcile` skips
+  it): one batched call mapping each step to the screen events that realise it and saying what changed,
+  from OCR change records, with every quote verified in code. Flags it raises have `origin: reconcile`.
+  Prompt: `RECONCILER_SYSTEM`. Design and first measurement: `24-speech-to-diff-deep-dive.md`. Not yet
+  shown to improve the score on the real clip.
+
 ## Not yet part of the run
 
 - Pre-meeting intake (a stage before the Writer's Reviewer that turns source documents into open

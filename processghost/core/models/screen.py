@@ -42,3 +42,31 @@ class ScreenTimeline(BaseModel):
     scenes: List[Scene] = Field(default_factory=list)
     # One (t_s, changed_frac, n_boxes) per sample after the first -- for plotting and tuning only.
     activity: List[Tuple[float, float, int]] = Field(default_factory=list)
+
+
+class RegionChange(BaseModel):
+    box: Box
+    before: str
+    after: str
+
+
+class ChangeRecord(BaseModel):
+    """What one screen event changed, as OCR text, extracted without any model (core/screen/records.py).
+    `chrome_*` is the OCR of the top and bottom strips of the frame (title, cell-reference / formula
+    bar, tabs, status bar on a spreadsheet; URL, breadcrumb and field labels on a web page); `regions`
+    is the before/after OCR of each changed box. Every claim the Reconciler makes about this event must
+    be a verbatim quote of `text()`."""
+
+    event_id: str
+    t_start: float
+    t_end: float
+    type: str
+    chrome_before: str = ""
+    chrome_after: str = ""
+    regions: List[RegionChange] = Field(default_factory=list)
+
+    def text(self) -> str:
+        parts = [self.chrome_before, self.chrome_after]
+        for r in self.regions:
+            parts.extend([r.before, r.after])
+        return " | ".join(p for p in parts if p)

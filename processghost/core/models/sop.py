@@ -23,7 +23,7 @@ Family = Literal["ambiguity", "structural"]
 Severity = Literal["blocking", "caution", "note"]
 Status = Literal["open", "resolved", "contradicted", "unresolvable", "unchecked", "check_failed"]
 Verdict = Literal["resolved", "contradicted", "unresolvable"]
-Origin = Literal["reviewer", "coverage", "screen"]
+Origin = Literal["reviewer", "coverage", "screen", "reconcile"]
 CheckerTier = Literal["ocr", "vision", "fallback_frames"]
 
 
@@ -47,6 +47,18 @@ class InferredClause(BaseModel):
     flag_id: str
 
 
+class ObservedChange(BaseModel):
+    """What the screen showed for a step, written by the Reconciler (docs/24) and kept only if every
+    quote in `quotes` is a verbatim substring of the cited events' OCR'd change records -- see
+    core/screen/reconcile.py. Rendered as `[observed @t]`, a third evidence kind next to said and
+    inferred: it was read off the screen for a step the speaker narrated, not inserted as a new step."""
+
+    text: str
+    event_ids: List[str] = Field(default_factory=list)
+    t_s: float = 0.0
+    quotes: List[str] = Field(default_factory=list)
+
+
 class SOPStep(BaseModel):
     step_id: str
     order: int
@@ -55,6 +67,7 @@ class SOPStep(BaseModel):
     attributions: List[Attribution] = Field(default_factory=list)
     inferred_clauses: List[InferredClause] = Field(default_factory=list)
     flag_ids: List[str] = Field(default_factory=list)
+    observed_changes: List[ObservedChange] = Field(default_factory=list)
 
 
 class AppendixSegment(BaseModel):

@@ -29,6 +29,20 @@ def normalize_for_quote_match(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip().lower()
 
 
+def compact(text: str) -> str:
+    """Lowercase and drop every whitespace and pipe character. OCR routinely drops or adds spaces
+    (`AMZN WEB SVCS` -> `AMZNWEBSVCS`) and the screen records join fragments with ` | `, so grounding a
+    quote against OCR text compares the text with those removed."""
+    return re.sub(r"[\s|]+", "", text or "").lower()
+
+
+def quote_in_ocr(quote: str, ocr_text: str, min_chars: int = 3) -> bool:
+    """True if `quote`, with whitespace and pipes removed, is a substring of `ocr_text` likewise
+    compacted. Quotes shorter than `min_chars` never ground (a 1-2 character quote matches anything)."""
+    q = compact(quote)
+    return len(q) >= min_chars and q in compact(ocr_text)
+
+
 def quote_is_grounded(quote: str, haystack_text: str) -> bool:
     """True only if `quote` (normalized) is an actual substring of `haystack_text` (normalized).
     The haystack is a transcript for Reviewer transitions, or a source passage's text for an

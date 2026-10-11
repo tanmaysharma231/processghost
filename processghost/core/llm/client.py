@@ -195,14 +195,16 @@ class LLMClient:
     @llm_retry()
     def transcribe(self, audio_path: Path, model: str | None = None) -> Dict[str, Any]:
         model_name = model or config.MODEL_WHISPER
-        key = cache.make_key("transcribe", "openai", model_name, files=[audio_path])
+        key = cache.make_key("transcribe", "openai", model_name, "words", files=[audio_path])
         hit = cache.get("transcribe", key)
         if hit is not None:
             self.metrics.add({}, model_name, stage="transcribe", latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
             return hit
         t0 = time.monotonic()
         with audio_path.open("rb") as f:
-            resp = self.client.audio.transcriptions.create(model=model_name, file=f, response_format="verbose_json")
+            resp = self.client.audio.transcriptions.create(
+                model=model_name, file=f, response_format="verbose_json", timestamp_granularities=["word", "segment"]
+            )
         latency_ms = (time.monotonic() - t0) * 1000
         resp_dict = resp.dict()
         usage = resp_dict.get("usage", {})

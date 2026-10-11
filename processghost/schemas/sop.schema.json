@@ -176,7 +176,8 @@
           "enum": [
             "reviewer",
             "coverage",
-            "screen"
+            "screen",
+            "reconcile"
           ],
           "title": "Origin",
           "type": "string"
@@ -301,6 +302,39 @@
       "title": "InferredClause",
       "type": "object"
     },
+    "ObservedChange": {
+      "description": "What the screen showed for a step, written by the Reconciler (docs/24) and kept only if every\nquote in `quotes` is a verbatim substring of the cited events' OCR'd change records -- see\ncore/screen/reconcile.py. Rendered as `[observed @t]`, a third evidence kind next to said and\ninferred: it was read off the screen for a step the speaker narrated, not inserted as a new step.",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        },
+        "t_s": {
+          "default": 0.0,
+          "title": "T S",
+          "type": "number"
+        },
+        "quotes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Quotes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "ObservedChange",
+      "type": "object"
+    },
     "Resolution": {
       "description": "A Checker (Phase 3) verdict for one flag.",
       "properties": {
@@ -410,6 +444,13 @@
             "type": "string"
           },
           "title": "Flag Ids",
+          "type": "array"
+        },
+        "observed_changes": {
+          "items": {
+            "$ref": "#/$defs/ObservedChange"
+          },
+          "title": "Observed Changes",
           "type": "array"
         }
       },

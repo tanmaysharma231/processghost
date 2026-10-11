@@ -27,6 +27,16 @@ def _bad_request() -> openai.BadRequestError:
     return openai.BadRequestError("nope", response=resp, body=None)
 
 
+def test_exhausted_credit_429_is_not_retried(fast_retry):
+    resp = httpx.Response(429, request=httpx.Request("POST", "http://x"))
+    err = openai.RateLimitError("no credits", response=resp, body={"code": "insufficient_quota", "message": "x"})
+    assert not is_transient(err)
+    c = _Caller([err])
+    with pytest.raises(openai.RateLimitError):
+        _wrap(c)(c)
+    assert c.calls == 1  # a plain rate limit is retried; an exhausted account is not
+
+
 class _Caller:
     def __init__(self, failures):
         self.metrics = Metrics()

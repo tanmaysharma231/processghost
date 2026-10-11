@@ -100,6 +100,12 @@ SCREEN_ESCALATION_EVENTS: int = 2  # level 1 widens to this many events either s
 # prompt is downgraded to unresolvable (docs/18 entry 5). Untuned; measured replay means were 0.34-0.54.
 CHECKER_ECHO_MAX: float = 0.8
 
+# --- Reconciler (docs/24) ---
+SCREEN_RECORD_CROP_PAD_PX: int = 20  # padding around a changed box before OCR'ing it for the change record
+SCREEN_RECORD_MAX_REGIONS: int = 3  # largest changed boxes recorded per event
+SCREEN_RECORD_MAX_CHARS: int = 500  # each OCR field is truncated to this before it is sent to the model
+RECONCILER_MAX_QUESTIONS_PER_STEP: int = 3
+
 # --- Pre-meeting intake ------------------------------------------------------
 # Ingestion limits for docs/19-pre-meeting-intake.md's stage-1 source reading (core/io/documents.py).
 # Every truncation here must record an ingest_note rather than silently dropping content -- same

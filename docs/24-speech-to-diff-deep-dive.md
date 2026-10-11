@@ -88,3 +88,60 @@ per-step "what was left unspecified" questions. The Reviewer's transcript-only f
   `22-architecture-v3.md`) or the recorder.
 - Two actions inside one second merge into one event (the sheet switch and the cell selection in
   ev-005), so the record for that event holds both.
+
+## Built, and what the first measurement showed (2026-10-11)
+
+Built behind `run_pipeline(use_screen=True)` (on by default with `--screen`; `--no-reconcile` turns it
+off for comparison):
+- `core/screen/records.py`: per-event change records by local OCR (chrome strips before/after, changed
+  regions before/after), OCR cached by image content.
+- Word-level timestamps from Whisper, attached to each transcript segment.
+- `RECONCILER_SYSTEM` and `core/screen/reconcile.py`: one batched call; every quote verified against
+  the cited event's record (whitespace and pipe noise removed); a quote only counts for an event the
+  model declared for that step. Questions, said-not-shown steps and unsupported claims become
+  `origin: reconcile` flags (already unresolvable); events no step explains become open flags for the
+  Checker. Falls back to Align's counting heuristic if the call fails.
+- `Step.observed_changes`, rendered as `Observed on screen: ... [observed @t, ev-N]`.
+- `evals/score_findings.py` + `expected_findings.json`: the six findings from
+  `12-real-scenario-target.md` as pattern groups, forbidden claims, and a false-completeness check.
+  238 tests pass.
+
+Baseline, scoring existing runs (this is the number to beat):
+
+| Run | Findings surfaced (of 6) | Forbidden claim | Said "nothing missing" while findings were missing |
+|---|---|---|---|
+| v2, Aug 30 | 0 | no | no |
+| v3 first run | 1 | no | no |
+| v3 second run, twice (cached replay) | 3 (the sheet names) | yes | yes |
+
+First run with the reconciler (one run, `20261011-163254-5c2a1f`, $0.136): **2 of 6**, no forbidden
+claim, no false completeness, 6 reconciler questions raised. That is not an improvement over the
+baseline, and it is one sample. Read from the run:
+
+- Right: every "observed on screen" line is a verbatim fragment of a real record; nothing was invented;
+  the "said but not shown" and "what specific value was used" questions are real open questions.
+- Wrong: the model described window chrome ("the view changed to Sheet2of3") and ignored the cell
+  references (`F18`, `C18`) that carry the useful detail, so finding 5 was still not surfaced.
+- Wrong: it mapped "paste" to the event that switched sheets back, not to the event where the value
+  appeared, and mapped "copy" to nothing (the copy sits inside the merged sheet-switch event).
+- Wrong: it marked "the total will get updated automatically" as **supported**, quoting `Sum:45,000`,
+  which is the status bar's sum of the selected cell. The prompt warns about exactly this and the model
+  did it anyway: grounding checks that a quote exists, not what it means.
+- Still wrong, and not the reconciler's doing: the Checker resolved a structural flag with a confident
+  false step ("the pasted value updates the total in the Transactions-March sheet").
+
+A prompt change was made after this run (name the cell, field or tab, and prefer the event that shows
+the action itself). **It was not measured**: the OpenAI account ran out of credit before the three
+planned fresh runs, so the effect of that change is unknown. The retry policy also treated that error as
+retryable; it no longer does.
+
+## What to do next
+
+1. Add credit and run
+   `python -m evals.score_findings --run 3 --video ../data/english_hackathon_test.mp4 --screen` (and the
+   same with `--no-reconcile`) to compare hit rates over repeated no-cache runs.
+2. Decide how to stop false support for consequence claims. Options: require the supporting quote to
+   come from a region other than the one where the action happened; or treat any claim about a "total"
+   as open unless a record shows the value the formula would produce. Neither is built.
+3. Address the Checker's confident wrong structural resolutions (the inserted step), the largest
+   remaining source of false statements in the output.

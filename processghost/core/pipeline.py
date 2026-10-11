@@ -60,8 +60,11 @@ from core.models.sop import (
 from core.models.tokens import TranscriptSegment
 from core.text_grounding import echo_score
 from core.screen.align import align_events
+from core.models.reconcile import ReconcilerOutput
 from core.screen.evidence import build_evidence, select_events
 from core.screen.ocr import get_ocr
+from core.screen.reconcile import build_reconciler_input, merge_reconciler_output
+from core.screen.records import build_change_records
 from core.screen.timeline import build_screen_timeline
 from report import sop_render
 from report.build_spec import write_build_spec
@@ -85,7 +88,25 @@ def _transcribe(client, audio_path: Path) -> list[dict]:
         stt_result = client.transcribe(audio_path)
         return parse_sarvam_stt_result(stt_result)
     transcript_resp = client.transcribe(audio_path)
-    return transcript_resp.get("segments", [])
+    segments = transcript_resp.get("segments", [])
+    _attach_words(segments, transcript_resp.get("words") or [])
+    return segments
+
+
+def _attach_words(segments: list[dict], words: list[dict]) -> None:
+    """Give each segment the words spoken inside it (`{"word", "start", "end"}`), so later stages can
+    tell WHEN each word was said, not just which sentence. Words with no containing segment attach to
+    the nearest earlier one. Segments are mutated in place; no words (Sarvam path, older cache) leaves
+    them as they were."""
+    if not words or not segments:
+        return
+    for seg in segments:
+        seg["words"] = []
+    for w in words:
+        owner = next((s for s in segments if s["start"] <= w["start"] < s["end"]), None)
+        if owner is None:
+            owner = max((s for s in segments if s["start"] <= w["start"]), key=lambda s: s["start"], default=segments[0])
+        owner["words"].append({"word": w["word"], "start": float(w["start"]), "end": float(w["end"])})
 
 
 class WriterFailedError(RuntimeError):
@@ -537,11 +558,13 @@ def _screen_stage(client, run_dir: Path, video_path: Path):
         return None
 
 
-def _align_stage(client, run_dir: Path, doc: SOPDocument, timeline, transcript: List[TranscriptSegment]) -> SOPDocument:
+def _align_stage(
+    client, run_dir: Path, doc: SOPDocument, timeline, transcript: List[TranscriptSegment], *, silent_flags: bool = True
+) -> SOPDocument:
     """Stage 2b: silent-step flags + event attachment. Non-fatal -- on failure records
     `align_failed` and returns the document unchanged."""
     try:
-        result = align_events(doc, timeline.events, transcript)
+        result = align_events(doc, timeline.events, transcript, silent_flags=silent_flags)
         storage.save_json(
             {"records": result.records, "said_no_event_step_ids": result.said_no_event_step_ids},
             run_dir / "alignment.json",
@@ -552,8 +575,36 @@ def _align_stage(client, run_dir: Path, doc: SOPDocument, timeline, transcript: 
         return doc
 
 
+def _reconcile_stage(
+    client, run_dir: Path, doc: SOPDocument, timeline, segments_raw: list[dict], transcript: List[TranscriptSegment]
+) -> Optional[SOPDocument]:
+    """Stage 2c (docs/24): one batched call mapping steps onto screen events and saying what changed
+    for every step. Returns None on any failure (recorded as `reconcile_failed`) so the caller falls
+    back to Align's counting heuristic."""
+    try:
+        ocr = get_ocr()
+        if ocr is None:
+            raise RuntimeError("no local OCR engine available (pip install rapidocr-onnxruntime)")
+        records = build_change_records(timeline, run_dir / "screen", ocr)
+        storage.save_json([r.model_dump(mode="json") for r in records], run_dir / "change_records.json")
+        output = client.structured_chat(
+            prompts.RECONCILER_SYSTEM,
+            build_reconciler_input(doc, records, segments_raw),
+            ReconcilerOutput,
+            stage="reconcile",
+        )
+        return merge_reconciler_output(doc, output, records, transcript)
+    except Exception as exc:  # noqa: BLE001 - the reconciler is additive; its failure must not lose the run
+        client.metrics.record_failure("reconcile_failed", str(exc))
+        return None
+
+
 def run_pipeline(
-    video_file: Path, frame_interval_s: float = config.FRAME_INTERVAL_S, *, use_screen: bool = False
+    video_file: Path,
+    frame_interval_s: float = config.FRAME_INTERVAL_S,
+    *,
+    use_screen: bool = False,
+    reconcile: bool = True,
 ) -> RunArtifacts:
     """Phase 1+2: audio extraction -> STT -> Writer -> Reviewer -> sop_draft.md. Checker (Phase 3)
     is not implemented yet; frame_interval_s is accepted for API compatibility with the Streamlit
@@ -619,7 +670,14 @@ def run_pipeline(
                 timeline = _screen_stage(client, run_dir, local_video)
             if timeline is not None:
                 with metrics.stage("align"):
-                    sop = _align_stage(client, run_dir, sop, timeline, transcript)
+                    attached = _align_stage(client, run_dir, sop, timeline, transcript, silent_flags=not reconcile)
+                reconciled = None
+                if reconcile:
+                    with metrics.stage("reconcile"):
+                        reconciled = _reconcile_stage(client, run_dir, attached, timeline, segments_raw, transcript)
+                    if reconciled is None:  # fall back to Align's counting heuristic for silent steps
+                        attached = _align_stage(client, run_dir, sop, timeline, transcript, silent_flags=True)
+                sop = reconciled if reconciled is not None else attached
 
         sop_draft_path = sop_render.write_sop(
             sop, run_dir, video_name=video_file.name, filename="sop_draft.md"
