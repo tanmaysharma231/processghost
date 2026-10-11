@@ -85,6 +85,7 @@ resolved it (`checker_tier`), so a consumer can tell an observed answer from an 
 
 | If you want | Read |
 |---|---|
+| Every stage, decision and open question in one place | `docs/25-decision-register.md`, or open `docs/pipeline-explorer.html` in a browser |
 | The reasoning behind the main choices | `docs/adr/` |
 | What it does not do | `docs/scope-and-limits.md` |
 | What is stored and what leaves the machine | `docs/data-handling.md` |

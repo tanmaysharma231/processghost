@@ -59,6 +59,13 @@ Recorded here because they shape every document below and were made explicitly, 
 | `22-architecture-v3.md` | v3 design: independent screen timeline (built), Align for unspoken steps and a cheaper change-driven Checker (not built), 20 decisions with rejected alternatives, data contracts, measured worked example, roadmap with exit checks. |
 | `23-checker-learnings.md` | What the v2 Checker was sent and said, measured by replaying five real runs: two thirds of sampled frames carried no change, a sheet switch is only ~10.8% of pixels, and the model often echoes the prompt. Evidence behind the v3 design. |
 
+### Decision register and explorer (generated)
+
+| Doc | Hook |
+|---|---|
+| `25-decision-register.md` | Every stage as a decision tree (steps, conditions, what happens on each branch), failure behavior, current settings, all 36 decisions with what was rejected, and the open questions. Generated from `scripts/pipeline_spec.py` and the code; do not edit by hand. |
+| `pipeline-explorer.html` | The same content as an interactive page: inputs, then the stages; click a stage for its steps and conditions, a collapsible box with its exact prompt, live settings and the decisions behind it. Open the file in a browser. Rebuild with `python -m scripts.build_pipeline_explorer`. |
+
 ### Deep dives
 
 | Doc | Hook |

@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+</head>
+<body>
+<title>ProcessGhost Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: two lanes (what was said / what changed on screen) meet in a reconcile row; a stage opens a detail panel below. */
+:root {
+  --bg: #f2f5f6;
+  --surface: #ffffff;
+  --surface-2: #e9eff1;
+  --ink: #13222b;
+  --muted: #566873;
+  --line: #d3dde2;
+  --accent: #0b6b78;
+  --accent-ink: #ffffff;
+  --accent-soft: #d9eef0;
+  --ok: #1d7a4b;
+  --warn: #9b5a06;
+  --stop: #b3261e;
+  --plan: #566873;
+  --code-bg: #edf2f4;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1418; --surface: #141d23; --surface-2: #1b2830; --ink: #e2eaee; --muted: #8fa2ae; --line: #263742;
+    --accent: #5cc4cf; --accent-ink: #062a30; --accent-soft: #13323a; --ok: #5cc48c; --warn: #e3a24a; --stop: #f08a82; --plan: #8fa2ae;
+    --code-bg: #0b1116; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1418; --surface: #141d23; --surface-2: #1b2830; --ink: #e2eaee; --muted: #8fa2ae; --line: #263742;
+  --accent: #5cc4cf; --accent-ink: #062a30; --accent-soft: #13323a; --ok: #5cc48c; --warn: #e3a24a; --stop: #f08a82; --plan: #8fa2ae;
+  --code-bg: #0b1116; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 56px; }
+h1, h2, h3, h4 { margin: 0; line-height: 1.25; text-wrap: balance; }
+h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; }
+.sub { color: var(--muted); margin: 4px 0 0; max-width: 70ch; }
+.mono { font-family: var(--font-mono); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header.top { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: end; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+nav.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab { background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.count { font-family: var(--font-mono); font-size: 0.8em; opacity: 0.8; margin-left: 6px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 6px; color: var(--muted); font-size: 0.85rem; align-items: center; }
+
+/* chips */
+.chip { display: inline-block; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1; padding: 4px 7px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); white-space: nowrap; }
+.chip.llm { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.chip.hybrid { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip.code { color: var(--muted); }
+.chip.built { color: var(--ok); border-color: var(--ok); }
+.chip.partial { color: var(--warn); border-color: var(--warn); }
+.chip.planned { color: var(--plan); border-style: dashed; }
+.chip.optin { color: var(--muted); background: var(--surface-2); }
+.chip.num { background: var(--surface-2); color: var(--ink); }
+
+/* flow */
+.flow { display: grid; gap: 10px; margin-top: 18px; }
+.group-label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.lane, .row { display: flex; flex-direction: column; min-width: 0; }
+.merge-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.conn { width: 2px; height: 16px; background: var(--line); margin: 0 auto; position: relative; flex: none; }
+.conn::after { content: ""; position: absolute; bottom: -1px; left: -4px; border: 5px solid transparent; border-top-color: var(--line); border-bottom: 0; }
+.join { display: flex; justify-content: center; color: var(--muted); font-size: 0.8rem; font-family: var(--font-mono); padding: 2px 0; }
+.box { text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; cursor: pointer; display: grid; gap: 7px; min-width: 0; width: 100%; }
+.box:hover { border-color: var(--accent); }
+.box[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+.box .head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.box .name { font-weight: 600; font-size: 1rem; }
+.box .short { color: var(--muted); font-size: 0.86rem; }
+.box.input, .box.output { border-style: dashed; }
+
+/* detail */
+.detail { margin-top: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; min-width: 0; }
+.detail > header { display: grid; gap: 8px; margin-bottom: 14px; }
+.detail h2 { font-size: 1.3rem; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.io { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 12px 0; }
+.io h4, .label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; font-weight: 500; }
+.io ul, .plain { margin: 0; padding-left: 18px; }
+.io li { margin: 2px 0; }
+details.sec { border-top: 1px solid var(--line); padding: 10px 0; }
+details.sec > summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; gap: 8px; align-items: center; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::before { content: "+"; font-family: var(--font-mono); width: 14px; color: var(--accent); }
+details.sec[open] > summary::before { content: "-"; }
+details.sec > .body { padding-top: 10px; }
+ol.tree { margin: 0; padding-left: 22px; display: grid; gap: 12px; }
+ol.tree > li { padding-left: 4px; }
+.step { font-weight: 500; }
+.note { color: var(--muted); font-size: 0.86rem; margin-top: 2px; }
+.branches { display: grid; gap: 5px; margin-top: 8px; }
+.branch { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: baseline; border-left: 3px solid var(--ok); background: var(--surface-2); border-radius: 0 6px 6px 0; padding: 7px 10px; }
+.branch.warn { border-left-color: var(--warn); }
+.branch.stop { border-left-color: var(--stop); }
+.branch .if { font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted); }
+.branch .cond { min-width: 0; }
+.branch .then { grid-column: 2; color: var(--muted); }
+.branch .then b { color: var(--ink); font-weight: 500; }
+.fail { border-left: 3px solid var(--warn); padding: 6px 12px; background: var(--surface-2); border-radius: 0 6px 6px 0; }
+table.kv { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+table.kv td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.kv td:first-child { font-family: var(--font-mono); color: var(--muted); white-space: nowrap; }
+table.kv td:last-child { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.scroll-x { overflow-x: auto; }
+.prompt-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+pre.prompt { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow: auto; }
+.btn { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; font-size: 0.8rem; }
+.btn:hover { border-color: var(--accent); }
+.decchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.decchips button { cursor: pointer; text-align: left; }
+
+/* decisions + open */
+.toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 12px; align-items: center; }
+.toolbar input, .toolbar select { font: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; min-width: 0; }
+.toolbar input { flex: 1 1 240px; }
+.list { display: grid; gap: 8px; }
+details.dec, .qcard { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-width: 0; }
+details.dec[open] { border-color: var(--accent); }
+details.dec > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; list-style: none; }
+details.dec > summary::-webkit-details-marker { display: none; }
+details.dec .title { font-weight: 500; flex: 1 1 260px; min-width: 0; }
+.dec-body { display: grid; gap: 8px; padding-top: 10px; color: var(--ink); }
+.dec-body p { margin: 0; }
+.dec-body .label { margin: 0; }
+.qcard h3 { font-size: 1rem; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.qcard p { margin: 8px 0; }
+.empty { color: var(--muted); padding: 18px 0; }
+.foot { margin-top: 28px; color: var(--muted); font-size: 0.82rem; }
+
+@media (max-width: 760px) {
+  .lanes, .io { grid-template-columns: 1fr; }
+  .detail { padding: 14px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .box, .btn, .tab { transition: border-color 0.12s, background-color 0.12s; }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>ProcessGhost pipeline</h1>
+      <p class="sub">From a narrated screen recording to an annotated SOP. Click a stage to see its steps, conditions, settings and prompt.</p>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button class="tab" role="tab" id="tab-pipeline" data-tab="pipeline" type="button">Pipeline</button>
+      <button class="tab" role="tab" id="tab-decisions" data-tab="decisions" type="button">Decisions<span class="count" id="n-decisions"></span></button>
+      <button class="tab" role="tab" id="tab-open" data-tab="open" type="button">Open questions<span class="count" id="n-open"></span></button>
+    </nav>
+  </header>
+
+  <section id="view-pipeline" role="tabpanel" aria-labelledby="tab-pipeline">
+    <div class="legend">
+      <span><span class="chip llm">LLM</span> calls a model</span>
+      <span><span class="chip hybrid">LLM + CODE</span> calls a model and verifies its answer in code</span>
+      <span><span class="chip code">CODE</span> plain Python, no model</span>
+      <span><span class="chip built">built</span> <span class="chip partial">partial</span> <span class="chip planned">planned</span></span>
+    </div>
+    <div class="flow" id="flow"></div>
+    <div class="detail" id="detail" aria-live="polite"></div>
+  </section>
+
+  <section id="view-decisions" role="tabpanel" aria-labelledby="tab-decisions" hidden>
+    <div class="toolbar">
+      <input type="search" id="dec-q" placeholder="Search decisions" aria-label="Search decisions">
+      <select id="dec-stage" aria-label="Filter by stage"></select>
+      <select id="dec-status" aria-label="Filter by status">
+        <option value="">Any status</option><option value="built">built</option><option value="partial">partial</option><option value="planned">planned</option>
+      </select>
+      <span class="chip" id="dec-count"></span>
+    </div>
+    <div class="list" id="dec-list"></div>
+  </section>
+
+  <section id="view-open" role="tabpanel" aria-labelledby="tab-open" hidden>
+    <p class="sub" style="margin-top:16px">Decisions not yet made, and problems without a fix.</p>
+    <div class="list" id="open-list" style="margin-top:12px"></div>
+  </section>
+
+  <p class="foot">Generated from the code: prompts and setting values are read from <span class="mono">core/llm/prompts.py</span> and <span class="mono">core/config.py</span> when this page is built. Source: <span class="mono">scripts/pipeline_spec.py</span>.</p>
+</div>
+
+<script type="application/json" id="pg-data">{"stages":[{"id":"input","num":"In","name":"Input and guards","lane":"input","kind":"code","status":"built","short":"A recording comes in. Anything unusable is refused before money is spent.","inputs":["A narrated screen recording (video with audio)","Optional pre-meeting context files (planned, not built)"],"outputs":["Run directory with a copy of the video","manifest.json (code version, prompt hashes, settings, input hash)"],"model":"none","tree":[{"step":"Validate the file (core/guards.py)","note":"","branches":[{"if":"Not a file, or empty","then":"Refuse with the reason","tone":"stop"},{"if":"Larger than MAX_VIDEO_BYTES","then":"Refuse and name the limit","tone":"stop"},{"if":"Duration unreadable (corrupt, or ffprobe missing)","then":"Refuse","tone":"stop"},{"if":"Longer than MAX_VIDEO_DURATION_S","then":"Refuse: only short recordings are validated","tone":"stop"},{"if":"Otherwise","then":"Accept and continue","tone":"ok"}]},{"step":"Copy the video into runs/<run_id>/ and write manifest.json","note":"Code version, hash of every prompt, models, thresholds, input hash.","branches":[]},{"step":"Before every model call, check the cache (core/llm/cache.py)","note":"","branches":[{"if":"Same provider, model, prompts, input, schema, images and temperature seen before","then":"Return the stored answer. Cost: $0.","tone":"ok"},{"if":"Anything differs","then":"Call the provider and store the answer","tone":"ok"}]}],"failure":"A refused input stops the run before any file is copied or any call is made.","measured":["A second identical run cost $0.00 and produced the same sop.json (verified on the real clip)."],"issues":["Recordings may contain client data: see docs/data-handling.md. No redaction, no encryption at rest."],"optin":false,"knobs":[{"name":"MAX_VIDEO_BYTES","value":524288000},{"name":"MAX_VIDEO_DURATION_S","value":900.0},{"name":"MAX_RUN_COST_USD","value":2.0},{"name":"KEEP_RUN_MEDIA","value":true},{"name":"CACHE_ENABLED","value":true},{"name":"LLM_TEMPERATURE","value":0.0},{"name":"LLM_TIMEOUT_S","value":120.0}],"prompts":[]},{"id":"transcribe","num":"0","name":"Transcription","lane":"speech","kind":"code","status":"built","short":"Audio to timed words. No reasoning, only timing and text.","inputs":["Audio extracted from the video (ffmpeg)"],"outputs":["Segments: id, start, end, text","Word-level timestamps attached to each segment (OpenAI path)"],"model":"Whisper (OpenAI) or Saaras v3 (Sarvam)","tree":[{"step":"Extract audio, then transcribe with the configured provider","note":"","branches":[{"if":"OpenAI","then":"Whisper with word and segment timestamps; words are attached to the segment that contains them","tone":"ok"},{"if":"Sarvam","then":"Batch speech-to-text job; chunk timings parsed into segments; no word timing","tone":"ok"}]},{"step":"Check the timing","note":"","branches":[{"if":"One whole-transcript segment with no timing","then":"Mark timing_degraded: the document says its timestamps are unreliable, and the screen path is skipped","tone":"warn"},{"if":"Normal per-segment timing","then":"Continue","tone":"ok"}]}],"failure":"Fatal. There is no document yet, so a failed transcription ends the run (the cost is recorded).","measured":["Narration can lag or lead the action by 4 to 5 seconds (docs/24), which is why word times alone cannot align speech to screen."],"issues":["The Sarvam path has never been run against the real API in this project."],"optin":false,"knobs":[{"name":"MODEL_WHISPER","value":"whisper-1"},{"name":"SARVAM_MODEL_STT","value":"saaras:v3"}],"prompts":[]},{"id":"writer","num":"1","name":"Writer","lane":"speech","kind":"llm","status":"built","short":"Turns the transcript into ordered steps, deliberately naive: a vague 'paste it here' stays vague.","inputs":["Every transcript segment at once (index, start, end, text)"],"outputs":["SOPDocument with steps (title, instruction, 'said' attributions) and appendix segments (small talk, with a reason)"],"model":"MODEL_TEXT (gpt-4o) or sarvam-105b, one call","tree":[{"step":"One model call over the whole transcript","note":"Whole context at once, so a step can span several segments.","branches":[]},{"step":"Check the answer in code","note":"","branches":[{"if":"A segment is missing, or counted twice","then":"Reject","tone":"stop"},{"if":"A step has no 'said' attribution","then":"Reject: provenance is mandatory","tone":"stop"},{"if":"Every segment accounted for exactly once, every step attributed","then":"Build the SOPDocument","tone":"ok"}]},{"step":"Keep the speaker's own words","note":"The prompt forbids substituting a more specific name than the speaker used, and a test asserts that specifics never narrated do not appear.","branches":[]}],"failure":"Fatal and the only fatal stage after transcription. No fallback: with no document there is nothing for later stages to work on.","measured":["Step count varied between runs on the same clip (5, 8, 9), which changes everything downstream."],"issues":[],"optin":false,"knobs":[{"name":"MODEL_TEXT","value":"gpt-4o"},{"name":"LLM_TEMPERATURE","value":0.0}],"prompts":[{"name":"WRITER_SYSTEM","text":"<role>\nYou are converting the full narration transcript of a screen-recorded walkthrough of a business process into an ordered, imperative Standard Operating Procedure (SOP) draft -- one step per actionable moment, written exactly as narrated.\n<\/role>\n\n<context>\nYou will receive every segment of the transcript at once, in order, each with an index and its start/end timestamps. Your literal, timestamped record of what was said is what a later stage uses to build a flowchart of the process and pinpoint exactly where information is missing and which moment in the video to check -- preserving the speaker's own words, including vague references, is what makes that possible. A cleaned-up or \"helpfully\" repaired version would erase the exact signal the rest of the pipeline is built to find.\n<\/context>\n\n<instructions>\nFor each transcript segment that expresses an actionable step:\n1. Decide which SOP step it belongs to. Multiple consecutive segments describing the same action may combine into one step; a single segment may also be split into two steps if it clearly describes two sequential actions.\n2. Write a short \"title\" and a one- or two-sentence \"instruction\" in your own words, faithful to exactly what was said, in imperative form (e.g. \"Copy the value from the source sheet.\").\n3. Keep the speaker's own words for anything they referred to vaguely. If they say \"paste it here,\" the instruction must say \"paste it here\" -- not \"paste it into the correct column\" or any other repaired version, even when a specific answer seems inferable from context. Do not substitute a more specific name for anything than the speaker actually used.\n4. Give the step an \"attributions\" list: at least one entry with \"kind\": \"said\", the timestamp (\"t_s\") where that content starts, and \"segment_ids\" listing every input segment index that contributed to this step. Every step must have at least one attribution.\n\nFor each transcript segment with no actionable content (small talk, a pause, filler, an aside that doesn't describe a step), list it under \"appendix_segments\" instead of turning it into a step, with its segment_id, t_s (its start time), the segment's text, and a short \"reason\" (e.g. \"small talk\").\n\nEvery single input segment index must be accounted for exactly once -- either inside some step's attributions[].segment_ids, or inside appendix_segments. Do not drop a segment silently, and do not assign the same segment to more than one place.\n<\/instructions>\n\n<scope>\nThis is scenario-agnostic work: do not invent a sheet name, file name, column name, vendor name, or any other specific detail beyond what the transcript literally states.\n<\/scope>\n\n<output_format>\nRespond with a JSON object with exactly two fields:\n{\n  \"steps\": [\n    {\n      \"step_id\": \"step-01\",\n      \"order\": 1,\n      \"title\": \"<short title>\",\n      \"instruction\": \"<imperative instruction, faithful to exactly what was said>\",\n      \"attributions\": [\n        {\"kind\": \"said\", \"t_s\": <float>, \"segment_ids\": [<int>, ...]}\n      ]\n    }\n  ],\n  \"appendix_segments\": [\n    {\"segment_id\": <int>, \"t_s\": <float>, \"text\": \"<segment text>\", \"reason\": \"<why omitted>\"}\n  ]\n}\n\nstep_id values must be unique, in the form \"step-01\", \"step-02\", etc., matching \"order\" (1-indexed,\nin the order steps occur). If the transcript contains no actionable content at all, \"steps\" may be\nan empty array, but every segment must still appear in \"appendix_segments\" in that case.\n\nRespond with only the JSON object, no other text.\n<\/output_format>"}]},{"id":"reviewer","num":"2","name":"Reviewer","lane":"speech","kind":"hybrid","status":"partial","short":"Finds where a newcomer would get stuck, by omission: a step pair with no verified connection becomes a gap.","inputs":["Draft steps","The full transcript"],"outputs":["Transitions (what carries between steps, with a verbatim quote)","Flags: ambiguity or structural, each with a question, severity and window"],"model":"MODEL_TEXT or sarvam-105b, one call, then plain Python","tree":[{"step":"Model: for each consecutive pair, name what carries across, with a quote copied from the transcript","note":"Only when it honestly can. There is no ok/broken field to self-report.","branches":[]},{"step":"Model: run four ambiguity checks on every step","note":"Unresolved pointer words; missing names; unstated selection rules; unverified consequences ('it updates').","branches":[]},{"step":"Code: coverage check (merge_reviewer_output)","note":"","branches":[{"if":"Transition has a quote that occurs in the transcript","then":"The pair is covered","tone":"ok"},{"if":"Quote invented, paraphrased, empty, or the pair omitted","then":"Treated as silence: synthesize a structural flag","tone":"warn"},{"if":"The model already raised its own structural flag for that pair","then":"Keep the model's specific flag; skip the generic one","tone":"ok"},{"if":"Transition between steps that are not consecutive","then":"Dropped","tone":"ok"}]}],"failure":"Non-fatal. On any failure the Writer's document ships unchanged with review_failed=True and zero flags, and sop.md shows a REVIEW FAILED banner.","measured":["10 runs on one fixed draft: grounded transitions 0 to 2 (zero in 4 of 10); structural flags 3 to 6; ambiguity flags 2 to 5; total flags only 7 to 9.","Quote-grounding stopped invented quotes counting as coverage; it did not stop the model skipping the task."],"issues":["Flag count is unstable between identical runs. What 'stable' should mean has not been decided (see Open questions)."],"optin":false,"knobs":[{"name":"MODEL_TEXT","value":"gpt-4o"},{"name":"LLM_TEMPERATURE","value":0.0}],"prompts":[{"name":"REVIEWER_SYSTEM","text":"<role>\nYou are reviewing a draft Standard Operating Procedure (SOP) built directly from a narrated screen-recording transcript. Read it as a newcomer to this process would -- someone with zero prior knowledge of the sheets, files, or conventions involved -- and find every place that newcomer would get stuck.\n<\/role>\n\n<context>\nYou will receive the ordered list of draft steps and the full transcript they were built from. The transitions and flags you produce are what a later stage uses to build a flowchart of the process and check the video at the right moment -- an honest gap here is what lets that stage do its job.\n<\/context>\n\n<transitions>\nFor every pair of consecutive steps, try to name the piece of state that carries from the end of the first into the start of the second -- what specifically exists, is selected, is open, or is true at the boundary that lets the second step begin (e.g. \"the value copied in step 3 is on the clipboard\", \"the target sheet opened in step 2 is still the active sheet\"). Emit a transition for a pair only if you can name that state honestly and specifically, grounded in what the steps or transcript actually said. If the second step assumes something -- a location, a selection, an object -- that nothing earlier established, leave the pair out rather than inventing or guessing. An omitted transition is itself meaningful: it is how a missing step gets found. If the transcript indicates the step is conditional or sometimes skipped, note that in \"condition\" (e.g. \"only if the row is not already marked complete\"); otherwise leave it null.\n\nEvery transition you do emit must also carry a \"quote\": the exact transcript text, copied character-for-character from the segments you were given, that is where this connection comes from. Copy-paste it rather than paraphrasing -- a quote that only approximately matches what was said cannot be verified and the transition will be treated as unsupported. If you cannot point to an actual span of transcript text that grounds the connection, you do not have a real answer for this pair -- leave it out rather than emit a transition with a quote that is invented, generic, or only loosely related.\n<\/transitions>\n\n<ambiguity_checks>\nIndependently of the transitions above, re-read every step's instruction against these four checks. Run all four -- each catches a different failure shape, and a step can pass three and still fail the fourth.\n\n1. Unresolved pointer words. Scan for every word that points at something instead of naming it:    \"here\", \"there\", \"it\", \"this\", \"that\", \"this one\", \"the usual place\", \"the same as before\". For    each one, check whether the specific thing it points to was actually named somewhere earlier. If    nothing earlier names it, this is an ambiguity, even if the sentence reads as clear and    confident -- fluency is not the same as specificity.\n2. Missing names. A sheet, file, column, or button referenced with no name at all, not even a    pointer word -- the reference is simply absent.\n3. Unstated selection rules. A step picks one item from among several similar ones (a row, a file,    a match) with no stated rule for which one.\n4. Unverified consequences. A claim that something happens as a RESULT of an action, rather than    being an action itself: \"automatically\", \"it updates\", \"it saves\", \"that fixes it\", \"which    triggers\". Check the transcript for a moment where that consequence is actually shown or    confirmed happening, not just asserted again. If it's only ever asserted, this is an ambiguity --    the doc would be telling a newcomer to trust something nobody actually checked on screen.\n<\/ambiguity_checks>\n\n<flags>\nFor each ambiguity found, create a flag with family \"ambiguity\", attached to the one step_id it belongs to.\nFor each transition pair left out above, create a flag with family \"structural\", with between_step_ids set to [from_step_id, to_step_id]. If you notice a specific structural problem beyond a missing transition -- an outcome asserted with nothing shown to produce it, or an edit with nothing opened or located first -- flag it here with family \"structural\" too.\n\nEvery flag needs: a \"question\" phrased for a human reading the doc (e.g. \"Which column does the copied value go into?\"), a \"severity\" of \"blocking\" (a newcomer would be stopped cold), \"caution\" (they could proceed but might get it wrong), or \"note\" (minor, unlikely to cause real trouble), and a \"window\": the range of input transcript segment indices where this topic is discussed, from where it starts to where the narration moves on to something else. Use segment indices, not seconds.\n\nIt is fine, and expected, to raise a flag you are not fully certain about -- a later stage checks each flag against the video and resolves or dismisses it. Do not chase certainty here; chase coverage.\n<\/flags>\n\n<scope>\nThis is scenario-agnostic work: do not invent a sheet name, file name, column name, vendor name, or any other specific detail beyond what the draft or transcript literally states.\n<\/scope>\n\n<output_format>\nRespond with a JSON object with exactly two fields:\n{\n  \"transitions\": [\n    {\"from_step_id\": \"step-01\", \"to_step_id\": \"step-02\",\n     \"carries\": \"<specific state that carries across, grounded in what was said>\",\n     \"quote\": \"<verbatim transcript text this is grounded in, copied exactly>\",\n     \"condition\": null}\n  ],\n  \"flags\": [\n    {\"family\": \"ambiguity\", \"question\": \"<question for a human>\",\n     \"severity\": \"blocking\", \"step_id\": \"step-03\",\n     \"window_segment_ids\": [5, 6, 7]},\n    {\"family\": \"structural\", \"question\": \"<question for a human>\",\n     \"severity\": \"blocking\", \"between_step_ids\": [\"step-04\", \"step-05\"],\n     \"window_segment_ids\": [8, 9]}\n  ]\n}\n\nOmit \"step_id\" on a structural flag if it is about a transition rather than one step; omit \"between_step_ids\" on an ambiguity flag. Do not assign flag_id yourself; it will be assigned after parsing.\n\nRespond with only the JSON object, no other text.\n<\/output_format>"}]},{"id":"screen","num":"0b","name":"Screen timeline","lane":"screen","kind":"code","status":"built","short":"Pixels only, no model: turns the video into discrete change events with before and after frames.","inputs":["The video"],"outputs":["screen_events.json: events, scenes, per-sample activity","Full-resolution before/after keyframes per event"],"model":"none (local OpenCV; local RapidOCR for scene labels)","tree":[{"step":"Sample frames at SCREEN_FPS, downscale, grayscale, blur","note":"","branches":[]},{"step":"Difference against the previous sample, find changed boxes (diff_boxes)","note":"","branches":[{"if":"Changed fraction below SCREEN_ACTIVE_FRAC","then":"Treat as noise (cursor, compression); not active","tone":"ok"},{"if":"At or above it","then":"Active sample","tone":"ok"}]},{"step":"Group active samples into events","note":"A run ends after SCREEN_SETTLE_S of stillness; a burst after a still gap starts a new event.","branches":[]},{"step":"Keyframes: last still sample before the change, last active sample after it","note":"Both stored at full resolution.","branches":[]},{"step":"Classify the event from the net before/after difference","note":"","branches":[{"if":"After frame is the before frame shifted vertically","then":"large_shift (a scroll)","tone":"ok"},{"if":"Changed boxes span at least SCREEN_SCENE_COVERAGE of the frame AND at least SCREEN_SCENE_MIN_CHANGED of pixels changed","then":"scene_cut (a context switch); OCR the top and bottom strips as its label","tone":"ok"},{"if":"Otherwise","then":"local (a cell, field or selection changed)","tone":"ok"}]}],"failure":"Non-fatal. On failure the run records screen_failed and continues as v2: no silent-step flags, no event evidence.","measured":["Found 7 events on the real 24 s clip, matching the draft labels (the labels were read off the same frames, so this proves little about recall).","A spreadsheet sheet switch changed only about 10.8% of pixels, so a 'more than 40% changed' scene-cut rule never fires."],"issues":["Thresholds were tuned on one clip. Two actions inside one second merge into one event. Web and ERP screens untested."],"optin":true,"knobs":[{"name":"SCREEN_FPS","value":3.0},{"name":"SCREEN_ACTIVE_FRAC","value":0.0004},{"name":"SCREEN_PIXEL_THRESH","value":25},{"name":"SCREEN_MIN_BOX_AREA","value":150},{"name":"SCREEN_SETTLE_S","value":1.0},{"name":"SCREEN_SCENE_COVERAGE","value":0.3},{"name":"SCREEN_SCENE_MIN_CHANGED","value":0.03},{"name":"SCREEN_SCROLL_MIN_SHIFT_PX","value":8.0},{"name":"SCREEN_SCROLL_MIN_RESPONSE","value":0.3}],"prompts":[]},{"id":"align","num":"2b","name":"Align","lane":"screen","kind":"code","status":"partial","short":"Attaches screen events to flags. Also the fallback silent-step detector if the Reconciler fails.","inputs":["Steps and flags","Transcript timing","Screen events"],"outputs":["Each flag carries the ids of the events near it","Silent-step flags (only in fallback mode)"],"model":"none","tree":[{"step":"Attach events to every existing flag","note":"An event counts if it falls inside the flag's window or up to SCREEN_ALIGN_LEAD_S before it: action leads speech, never trails it.","branches":[]},{"step":"Silent-step detection (only when the Reconciler is off or failed)","note":"","branches":[{"if":"Event inside a step's spoken span, or shortly before it","then":"Owned by that step","tone":"ok"},{"if":"No step owns it","then":"Candidate silent step","tone":"warn"},{"if":"A step owns more than SCREEN_ALIGN_MAX_EVENTS_PER_STEP events","then":"The extras are candidates","tone":"warn"},{"if":"A flag already covers the same step pair","then":"No duplicate flag","tone":"ok"}]}],"failure":"Non-fatal: records align_failed and returns the document unchanged.","measured":["On the real clip the Reviewer's flags already covered every event, so it raised no silent flag. Unproven on any data."],"issues":["A fixed time window cannot align speech to screen: real segments are about 6 s long and narration lags the action. Superseded by the Reconciler for silent-step detection."],"optin":true,"knobs":[{"name":"SCREEN_ALIGN_LEAD_S","value":3.0},{"name":"SCREEN_ALIGN_MAX_EVENTS_PER_STEP","value":2}],"prompts":[]},{"id":"reconcile","num":"2c","name":"Reconciler","lane":"merge","kind":"hybrid","status":"partial","short":"For every step, says what changed on screen, quoting the OCR records. Anything it cannot quote is thrown away.","inputs":["Steps with word-timed speech","One OCR change record per screen event (chrome before/after, changed regions before/after)"],"outputs":["Observed changes on each step ('Observed on screen: ... [observed @t]')","Flags: unspecified questions, said-but-not-shown steps, unsupported claims, silent events"],"model":"MODEL_TEXT or sarvam-105b, one call, then plain Python","tree":[{"step":"Code: build change records by local OCR (cached by image content)","note":"Top and bottom strips before and after, plus the largest changed regions before and after.","branches":[]},{"step":"Model: one batched call over all steps and all records","note":"Per step: events, what changed, evidence quotes, unspecified questions. Per event: its step or none. Per claim: supported or not.","branches":[]},{"step":"Code: verify every quote","note":"","branches":[{"if":"Quote (spaces and pipes removed) is in the record of an event the model declared for that step","then":"Keep the 'what changed' sentence","tone":"ok"},{"if":"Not found, or taken from another event","then":"Drop the sentence; the step counts as said-but-not-shown","tone":"warn"}]},{"step":"Code: create flags (origin = reconcile)","note":"","branches":[{"if":"Step has no grounded change","then":"Flag: narrated but nothing on screen matches; created already unresolvable","tone":"warn"},{"if":"Model listed an unspecified question","then":"Flag it (capped per step, duplicates dropped); already unresolvable: the evidence was read, so it goes to the recorder","tone":"ok"},{"if":"A claimed consequence is not supported by a grounded quote","then":"Flag: blocking if the records show no change, caution if unclear","tone":"warn"},{"if":"An event no step explains","then":"Open silent-step flag; the Checker will describe it","tone":"ok"}]}],"failure":"Non-fatal. On any failure, or if no OCR engine is installed, it records reconcile_failed and falls back to Align's counting heuristic.","measured":["First run: 2 of 6 required findings; every 'observed' line was a real fragment of a record, nothing invented.","Described window chrome and missed the cell references that carry the useful detail (a prompt change to name locators is unmeasured: API credit ran out).","Mapped 'paste' to the sheet-switch event, not the event where the value appeared.","Marked 'the total updates' supported from the status bar's sum of the selected cell. Grounding checks a quote exists, not what it means."],"issues":["False support for consequence claims has no fix yet.","Record extraction is spreadsheet-shaped; web and ERP surfaces need their own profile."],"optin":true,"knobs":[{"name":"RECONCILER_MAX_QUESTIONS_PER_STEP","value":3},{"name":"SCREEN_RECORD_MAX_REGIONS","value":3},{"name":"SCREEN_RECORD_MAX_CHARS","value":500},{"name":"SCREEN_RECORD_CROP_PAD_PX","value":20}],"prompts":[{"name":"RECONCILER_SYSTEM","text":"<role>\nYou are reconciling what a person SAID while recording a screen walkthrough with what CHANGED on screen. You receive the narrated steps (with the timed words spoken for each) and a change record for every screen event, extracted from the video by OCR. Decide which events realise which steps, say what changed for each step, and surface what is still unspecified.\n<\/role>\n\n<context>\nA change record holds OCR text only: the window chrome before and after the change (title, tabs, the cell-reference box and formula bar of a spreadsheet, a URL or breadcrumb of a web page, the status bar) and, for each changed region, the text in it before and after. OCR can drop spaces or misread characters; treat the text as it is written. People often act a few seconds before or after they describe an action, so match events to steps on both the time of the words and the content (a name or value that appears both in the speech and in a record), not time alone. One event can realise more than one step, and one step can need more than one event.\n<\/context>\n\n<steps>\nFor EVERY step, in the order given, produce one entry:\n1. \"event_ids\": the events that realise this step. Leave it empty when no event shows it.\n2. \"what_changed\": one or two sentences stating what changed, built only from the text of the records you cite. Say WHERE each change happened -- name the cell reference, field, tab, sheet or page whenever a record shows one -- and WHAT value, label or selection is involved. A change of window or tab alone is the least informative thing a record can show; prefer the cell, field or value that was selected or edited. Choose the event that shows the action itself (a value appearing where something was pasted or typed, a selection moving, a page opening) rather than one that merely happens near it. Leave it empty when no event shows the step. Do not describe anything a record does not contain.\n3. \"evidence\": for what_changed, one or more quotes, each copied character-for-character from the record text of the event it names (\"event_id\" and \"quote\"). Quote short, specific fragments such as a cell reference, a value or a label. A quote that is not literally in that event's record text will be discarded together with the sentence it supports.\n4. \"unspecified\": questions a newcomer would still need answered after reading what_changed, about what neither the speech nor the records state: why this item was chosen over similar ones, what rule links two places, where a value came from. Do not ask about anything the records already answer. Give each a \"severity\" of \"blocking\" (a newcomer would be stopped), \"caution\" or \"note\".\n<\/steps>\n\n<events>\nAlso list every event exactly once in \"events\" with the \"step_id\" it realises, or null when no narrated step explains it. An event that changes the screen without being described is one of the most useful things to report, so do not force it onto the nearest step.\n<\/events>\n\n<claims>\nWhen a step asserts a consequence of an action (\"it updates\", \"it recalculates\", \"it saves\", \"that fixes it\"), add a \"claims\" entry with the \"step_id\", the \"claim\" in the speaker's words, and \"supported\": \"yes\" only if a record shows the thing claimed actually changing (include the quote), \"no\" if the records show the action but nothing changes in what was claimed, \"unclear\" if the records cannot tell. A change that sits near the claimed one but is not the thing claimed (for example a running total shown for the current selection, when the claim is about a sheet total) does not support it.\n<\/claims>\n\n<scope>\nThis is scenario-agnostic work: do not invent a sheet, file, column, page or field name, a number, or any other detail that is not literally in the speech or the records.\n<\/scope>\n\n<output_format>\nRespond with a JSON object with exactly these fields:\n{\"steps\": [{\"step_id\": \"step-01\", \"event_ids\": [\"ev-001\"], \"what_changed\": \"<from the records only>\",\n            \"evidence\": [{\"event_id\": \"ev-001\", \"quote\": \"<verbatim from that record>\"}],\n            \"unspecified\": [{\"question\": \"<question>\", \"severity\": \"caution\"}]}],\n \"events\": [{\"event_id\": \"ev-001\", \"step_id\": \"step-01\"}, {\"event_id\": \"ev-002\", \"step_id\": null}],\n \"claims\": [{\"step_id\": \"step-03\", \"claim\": \"<speaker's words>\", \"supported\": \"no\", \"evidence\": []}]}\n\nRespond with only the JSON object, no other text.\n<\/output_format>"}]},{"id":"checker","num":"3","name":"Checker","lane":"merge","kind":"llm","status":"partial","short":"Resolves each open flag against the screen. Writes down what it saw before deciding, and 'unresolvable' is a valid answer.","inputs":["Open flags, most severe first","Screen events attached to each flag (v3) or video frames (v2 path)"],"outputs":["A verdict per flag: resolved, contradicted or unresolvable","Inferred clauses on steps, or new inferred steps"],"model":"MODEL_VISION (gpt-4o-mini) for images, MODEL_TEXT for text-only; or sarvam-105b over OCR text","tree":[{"step":"Select flags","note":"","branches":[{"if":"Status is open, sorted blocking first; first MAX_CHECKED_FLAGS","then":"Check them","tone":"ok"},{"if":"Beyond MAX_CHECKED_FLAGS","then":"Marked unchecked, never dropped","tone":"warn"},{"if":"Estimated spend reaches MAX_RUN_COST_USD","then":"Stop starting new flags; the rest are marked unchecked","tone":"warn"}]},{"step":"Per flag: choose the evidence path","note":"","branches":[{"if":"Flag has attached screen events (v3)","then":"Event path (below)","tone":"ok"},{"if":"No events","then":"v2 path: extract up to CHECKER_MAX_FRAMES_PER_FLAG frames from the flag's window; OpenAI sends them to a vision model, Sarvam OCRs them in one batch then reasons over text","tone":"ok"}]},{"step":"Event path, level 0: nearest event, OCR text, text model","note":"Evidence: full downscaled frame, numbered before/after tiles, OCR of chrome and regions.","branches":[]},{"step":"Read the verdict","note":"","branches":[{"if":"resolved or contradicted","then":"Apply it","tone":"ok"},{"if":"resolved, but the observation shares CHECKER_ECHO_MAX or more of its words with the prompt","then":"Downgrade to unresolvable (it restated the prompt)","tone":"warn"},{"if":"unresolvable","then":"Level 1: the events around it (plus or minus SCREEN_ESCALATION_EVENTS) and, on OpenAI, the images; then stop. Maximum two calls per flag","tone":"ok"}]},{"step":"Apply a resolution","note":"","branches":[{"if":"Ambiguity flag resolved","then":"Append an inferred clause to its step; the narrated text is never rewritten","tone":"ok"},{"if":"Structural flag resolved","then":"Insert a new inferred step between the two steps","tone":"ok"},{"if":"contradicted","then":"Flag becomes blocking","tone":"ok"},{"if":"unresolvable","then":"Terminal status; it goes back to the recorder as a question","tone":"ok"},{"if":"The call fails","then":"That flag becomes check_failed; the run continues","tone":"warn"}]}],"failure":"Non-fatal per flag. One failed call marks that flag check_failed and the run continues.","measured":["v2 on 5 real runs: 68% of sampled frame-to-frame differences were tiny; 15 of 38 flags failed on rate limits; about $0.04 to $0.06 per flag.","v2 'observed' text often restated the prompt: mean echo score 0.34 (resolved), 0.54 (unresolvable).","v3 on one run: $0.137 for the whole run, 0 failed flags, about $0.015 per flag."],"issues":["Resolved is too easy: several resolved answers were generic and named nothing the question asked for.","Structural flags can resolve into a confident false inserted step (seen in a real run)."],"optin":false,"knobs":[{"name":"MAX_CHECKED_FLAGS","value":20},{"name":"CHECKER_MAX_FRAMES_PER_FLAG","value":16},{"name":"CHECKER_FRAME_INTERVAL_S","value":0.5},{"name":"SCREEN_EVIDENCE_FULL_WIDTH","value":1024},{"name":"SCREEN_EVIDENCE_MAX_IMAGES","value":6},{"name":"SCREEN_ESCALATION_EVENTS","value":2},{"name":"CHECKER_ECHO_MAX","value":0.8},{"name":"MAX_RUN_COST_USD","value":2.0},{"name":"MODEL_VISION","value":"gpt-4o-mini"}],"prompts":[{"name":"CHECKER_EVENT_SYSTEM","text":"<role>\nYou are resolving ONE open question about a Standard Operating Procedure (SOP) that was drafted from a narrated screen-recording walkthrough. You are given the question, which FAMILY it belongs to (\"ambiguity\" or \"structural\"), the relevant excerpt of the SOP (the step(s) it concerns), the transcript spoken near the moment, and evidence of what changed on screen at that moment. Decide whether that evidence actually answers the question.\n<\/role>\n\n<context>\nThe person who recorded this walkthrough knew things they never said out loud, and this pipeline exists to surface exactly those. Your two outcomes are equally useful: answering the question from the screen, or naming it as a genuine gap so it can be taken back to that person as a question worth asking. You are not expected to know what was in their head -- only to report honestly what the evidence does and does not show, so if you are unsure, or the evidence is incomplete or simply does not cover this, say so plainly and answer \"unresolvable\".\n<\/context>\n\n<evidence>\nThe evidence describes screen CHANGES, listed per event:\n- a full after-frame, downscaled: use it to tell which window, sheet, file or page the user is in;\n- numbered tiles of the regions that changed, each with the BEFORE crop on top and the AFTER crop below: use them to read the exact value, cell, field or label that changed;\n- sometimes a low-resolution frame from before a switch between windows or pages;\n- \"Extracted screen text\": OCR of the window chrome (title, tabs, status bar) and of each changed region, which may contain recognition errors.\nImages may be absent when only extracted text is provided; your job is identical either way.\n<\/evidence>\n\n<scope>\nEvery specific name, label, or value you write in \"observed\" or \"inferred_text\" must be legible in the evidence you were given. When a plausible name comes to mind that you cannot actually read in the evidence, that is the signal to answer \"unresolvable\".\n\nThe question, the SOP excerpt and the transcript are context for what to look for, not evidence of what is on screen. \"observed\" must describe what the evidence itself shows: if it could be written without looking at the evidence, or mostly restates the question, the step text or the transcript, it is not an observation -- say what you can actually read, or answer \"unresolvable\".\n<\/scope>\n\n<procedure>\nWork in two steps, in order.\n\nSTEP 1 -- Observe. Fill in \"observed\" with what is literally legible in the evidence: exact labels, column headers, cell contents, what changed between the before and after crops, tab or sheet names, button text, or the relevant extracted text verbatim. Write only what you can actually see or read. If nothing legible relates to the question, say so plainly -- an honest empty observation is exactly the signal that leads to \"unresolvable\" below.\n\nSTEP 2 -- Decide the verdict, using ONLY what you wrote in \"observed\".\n<\/procedure>\n\n<verdicts>\nReturn exactly one of three.\n\n\"resolved\" -- your \"observed\" notes contain something concrete that specifically answers the question:\n- family \"ambiguity\" (the question asks to name or locate something -- which sheet, which column,   which button): your answer must add a concrete detail that was NOT already present in the   QUESTION's own wording. It may reuse a name from the narration when the screen confirms it. A   paraphrase of the question with no new noun in it is NOT a resolution.\n- family \"structural\" (the question asks what happens between two steps, or what a screen change   was): your answer must describe something your \"observed\" notes actually show happening -- a   specific field edited, a specific screen opened, a specific value changing -- NOT a restatement   of what the surrounding steps already say.\nPut the specific answer in \"inferred_text\", written as a short clause that could be appended after the vague text it clarifies, not a full sentence repeating the question.\n\n\"contradicted\" -- your \"observed\" notes show something that conflicts with what was said in the narration. Put a short description of what was said in \"narration_version\" and what was actually observed in \"screen_version\".\n\n\"unresolvable\" -- your \"observed\" notes do not settle the question either way: nothing legible relates to the specific thing being asked about, or the evidence does not cover the relevant moment. This is a real result, not a failure -- it means the answer lives only in the recorder's head, and the question goes back to them directly. Put a short explanation of what's missing in \"reason\". Do NOT invent a plausible-sounding answer just to avoid this verdict: a fabricated resolution is written into the final document as though it had been observed, while an honest \"unresolvable\" becomes a question someone can actually answer.\n<\/verdicts>\n\n<output_format>\nRespond with a JSON object with exactly these fields:\n{\"observed\": \"<what is literally legible in the evidence, written before you decide anything>\",\n \"verdict\": \"resolved\" | \"contradicted\" | \"unresolvable\",\n \"inferred_text\": \"<short clause, only for resolved, else null>\",\n \"reason\": \"<short explanation, only for unresolvable, else empty string>\",\n \"narration_version\": \"<only for contradicted, else null>\",\n \"screen_version\": \"<only for contradicted, else null>\"}\n\nRespond with only the JSON object, no other text.\n<\/output_format>"},{"name":"CHECKER_SYSTEM","text":"<role>\nYou are resolving ONE open question about a Standard Operating Procedure (SOP) that was drafted from a narrated screen-recording walkthrough. You are given the question, which FAMILY it belongs to (\"ambiguity\" or \"structural\"), the relevant excerpt of the SOP (the step(s) it concerns), the transcript spoken during the question's time window, and either real screenshots from that window or text extracted from those screenshots (OCR). Decide whether what is on screen actually answers the question.\n<\/role>\n\n<context>\nThe person who recorded this walkthrough knew things they never said out loud, and this pipeline exists to surface exactly those. Your two outcomes are equally useful: answering the question from the screen, or naming it as a genuine gap so it can be taken back to that person as a question worth asking. You are not expected to know what was in their head -- only to report honestly what the screen does and does not show, so if you are unsure, or the evidence is incomplete or simply does not cover this, say so plainly and answer \"unresolvable\".\n<\/context>\n\n<scope>\nEvery specific name, label, or value you write in \"observed\" or \"inferred_text\" must be legible in the evidence you were given. When a plausible name comes to mind that you cannot actually read in the evidence, that is the signal to answer \"unresolvable\". Your job is identical whether the evidence is screenshots or extracted OCR text.\n<\/scope>\n\n<procedure>\nWork in two steps, in order.\n\nSTEP 1 -- Observe. Fill in \"observed\" with what is literally legible in the evidence: exact labels, column headers, cell contents, highlighted or selected items, tab or sheet names, button text, or (for OCR input) the relevant extracted text verbatim. Write only what you can actually see or read. If nothing legible relates to the question, say so plainly (e.g. \"no labels or selection visible relevant to this question\") -- an honest empty observation is exactly the signal that leads to \"unresolvable\" below.\n\nSTEP 2 -- Decide the verdict, using ONLY what you wrote in \"observed\".\n<\/procedure>\n\n<verdicts>\nReturn exactly one of three.\n\n\"resolved\" -- your \"observed\" notes contain something concrete that specifically answers the question. What counts as specific enough depends on the question's family:\n- family \"ambiguity\" (the question asks to name or locate something -- which sheet, which column,   which button): your answer must add a concrete detail that was NOT already present in the   QUESTION's own wording. It is fine, and often correct, for the answer to reuse a name or word   from the narration/transcript (e.g. confirming a sheet really is named what the narration called   it) -- narration and screen agreeing is a real, useful resolution, not a repetition to avoid. The   test is specifically against the question text, not the narration: if your draft \"inferred_text\"   is just a paraphrase of the question itself with no new noun in it, that is NOT a resolution.\n- family \"structural\" (the question asks what happens between two steps that nothing narrated   covers): your answer must describe something your \"observed\" notes actually show happening on   screen -- a specific field being edited, a specific screen/tab being opened, a specific value   changing -- NOT a restatement of what the surrounding steps already say in the SOP excerpt or   transcript. Since nothing was ever said about this gap, ANY answer that just paraphrases the   already-known narration (rather than describing a new, screen-only observation) has added no   information and must be \"unresolvable\" instead, even if screenshots were provided.\nA resolved answer should let someone who never watched the recording go directly to the right place or perform the right action with no further guessing. Put the specific answer in \"inferred_text\", written as a short clause that could be appended after the vague text it clarifies (e.g. naming the exact column header, cell reference, or tab name visible on screen), not a full sentence repeating the question.\n\n\"contradicted\" -- your \"observed\" notes show something that conflicts with what was said in the narration (e.g. narration claims a total updates on its own, but the observed evidence shows the total unchanged after the relevant action, or shows a manual step happening instead). Put a short description of what was said in \"narration_version\" and what was actually observed in \"screen_version\".\n\n\"unresolvable\" -- your \"observed\" notes do not settle the question either way: nothing legible relates to the specific thing being asked about, or the window doesn't cover the relevant moment. This is a real result, not a failure -- it means the answer lives only in the recorder's head, which is precisely what this pipeline was built to find, and the question goes back to them directly. Put a short explanation of what's missing in \"reason\". Do NOT invent a plausible-sounding answer just to avoid this verdict: a fabricated resolution is written into the final document as though it had been observed, while an honest \"unresolvable\" becomes a question someone can actually answer.\n<\/verdicts>\n\n<output_format>\nRespond with a JSON object with exactly these fields:\n{\"observed\": \"<what is literally legible in the evidence, written before you decide anything>\",\n \"verdict\": \"resolved\" | \"contradicted\" | \"unresolvable\",\n \"inferred_text\": \"<short clause, only for resolved, else null>\",\n \"reason\": \"<short explanation, only for unresolvable, else empty string>\",\n \"narration_version\": \"<only for contradicted, else null>\",\n \"screen_version\": \"<only for contradicted, else null>\"}\n\nRespond with only the JSON object, no other text."}]},{"id":"triage","num":"4","name":"Triage","lane":"merge","kind":"code","status":"built","short":"A pure function of status and severity. No model. Decides what blocks, what warns, what proceeds.","inputs":["Every flag's status and severity"],"outputs":["build_spec.json: steps, flags with triage verdicts, severity-sorted escalation queue"],"model":"none","tree":[{"step":"triage_flag(status, severity)","note":"","branches":[{"if":"status = resolved","then":"proceed_with_assumption","tone":"ok"},{"if":"status = contradicted","then":"block_and_escalate","tone":"ok"},{"if":"any other status, severity = blocking","then":"block_and_escalate","tone":"warn"},{"if":"any other status, severity = caution or note","then":"proceed_with_flag","tone":"ok"}]},{"step":"Build the escalation queue from every block_and_escalate flag, sorted by severity","note":"","branches":[]}],"failure":"Cannot fail on a valid document: it is a pure function.","measured":["Same document in, same output out; tested exhaustively."],"issues":["Only as consistent as the severity the Reviewer or Reconciler assigned."],"optin":false,"knobs":[],"prompts":[]},{"id":"outputs","num":"Out","name":"Outputs","lane":"output","kind":"code","status":"built","short":"One validated document, rendered deterministically for people and for tools.","inputs":["The final SOPDocument"],"outputs":["sop.md: workflow as spoken (with observed changes), what we assumed, what is missing, questions to ask","sop.json and build_spec.json (schema_version 3.0; JSON Schemas in schemas/)","trace.jsonl: every call, payload, failure, retry and stage timing","run.json, manifest.json, alignment.json, change_records.json"],"model":"none","tree":[{"step":"Render sop.md from the document, never from a model","note":"Byte-deterministic, so diffing two runs is meaningful.","branches":[]},{"step":"Every line carries its evidence kind","note":"","branches":[{"if":"From the narration","then":"[said @t]","tone":"ok"},{"if":"Read off the screen for a narrated step","then":"[observed @t, event]","tone":"ok"},{"if":"Added by the Checker","then":"[inferred from screen @t]","tone":"ok"}]},{"step":"Invalid provenance","note":"","branches":[{"if":"A step without attribution, a flag without a window, a resolution without evidence","then":"The document cannot be constructed (a raising validator, not a soft flag)","tone":"stop"}]}],"failure":"A document that fails provenance validation cannot exist, so the failing stage's own failure rules apply.","measured":[],"issues":["A banner saying 'Nothing is missing' appeared in a run that missed three of the six required findings."],"optin":false,"knobs":[{"name":"KEEP_RUN_MEDIA","value":true}],"prompts":[]},{"id":"reliability","num":"All","name":"Retries, cache and limits","lane":"cross","kind":"code","status":"built","short":"How every model call fails, retries, caches and is capped.","inputs":["Every provider call"],"outputs":["A result, a cached result, or a clean failure that the owning stage handles"],"model":"none","tree":[{"step":"A provider call raises","note":"","branches":[{"if":"Out of credit (insufficient_quota and similar)","then":"Fail now: waiting cannot fix it","tone":"stop"},{"if":"Rate limit, timeout, connection error, 5xx","then":"Retry with jittered exponential backoff up to RETRY_MAX_ATTEMPTS; each retry is written to the trace","tone":"warn"},{"if":"The answer does not match its schema","then":"Re-ask once (RETRY_MAX_PARSE_ATTEMPTS), then fail to the stage's own fallback","tone":"warn"},{"if":"Anything else (auth, bad request, a bug)","then":"Fail immediately","tone":"stop"}]},{"step":"Spend","note":"","branches":[{"if":"Estimated cost reaches MAX_RUN_COST_USD","then":"The Checker stops starting flags; Writer and Reviewer are not interrupted","tone":"warn"},{"if":"Cache hit","then":"No call, no cost","tone":"ok"}]},{"step":"Every stage is bracketed by stage_start and stage_end trace events with a run id and duration","note":"","branches":[]}],"failure":"Each stage decides what a failure means (see the stage boxes). Only the Writer and transcription are fatal.","measured":["An out-of-credit error was retried five times before this rule existed; the first real out-of-credit failure exposed it."],"issues":["The cache stores transcripts and model answers unencrypted on disk."],"optin":false,"knobs":[{"name":"RETRY_MAX_ATTEMPTS","value":5},{"name":"RETRY_MAX_PARSE_ATTEMPTS","value":2},{"name":"RETRY_INITIAL_WAIT_S","value":2.0},{"name":"RETRY_MAX_WAIT_S","value":60.0},{"name":"LLM_TIMEOUT_S","value":120.0},{"name":"LLM_TEMPERATURE","value":0.0},{"name":"MAX_RUN_COST_USD","value":2.0},{"name":"CACHE_ENABLED","value":true}],"prompts":[]}],"decisions":[{"id":"D1","title":"Treat screen recordings as change points plus screenshots, not general video","why":"Screens are static between discrete jumps, so \"find when it changed, then read a few images\" captures nearly all information","rejected":"Native video VLM: most expensive, weakest at small screen text, and most \"open video models\" are generation models, not understanding models","status":"built","stages":["screen"],"source":"docs/22"},{"id":"D2","title":"Build speech and screen timelines independently, then join on time","why":"Only an independent screen timeline catches steps that are never spoken","rejected":"Transcript decides where to look (v2, or an agent calling `look(t)`): misses silent steps by design","status":"built","stages":["screen","align"],"source":"docs/22"},{"id":"D3","title":"Assume video only, no input events","why":"Target source is a meeting bot; recordings will not come with click or keystroke logs","rejected":"Recorder with event logging: simplest and most accurate, but not available in the target setting","status":"built","stages":["input"],"source":"docs/22"},{"id":"D4","title":"Changed region is the primary locator; cursor is a hint","why":"Many steps are not clicks (typing, shortcuts, scroll), results often appear away from the cursor, and cursor detection is fragile across themes and compression","rejected":"Crop around the mouse (original idea): misses dialogs, keyboard actions and remote effects","status":"built","stages":["screen"],"source":"docs/22"},{"id":"D5","title":"Diff by thresholded pixels and connected components, at 2 to 5 fps","why":"Catches a single cell changing; mean frame difference would miss it. Screens do not change faster than a few fps","rejected":"Full 30 fps or mean-difference scoring: wasted compute, missed small changes","status":"built","stages":["screen"],"source":"docs/22"},{"id":"D6","title":"One before/after keyframe pair per event (last static, first settled)","why":"One pair captures the whole change regardless of event length; avoids sending 100+ frames","rejected":"Fixed-interval frames per window (v2 Checker): redundant frames, change never isolated","status":"built","stages":["screen"],"source":"docs/22"},{"id":"D7","title":"Send a full downscaled after-frame, stitched padded before/after crops of the changed regions, and OCR'd chrome text","why":"VLM cost scales with pixels; crops cut cost, but only the full frame and the chrome (title, tabs, status bar) say which sheet, file or page you are on","rejected":"Full frames only: costly. Crops only: lose the sheet/file/page context (confirmed on real runs)","status":"built","stages":["checker"],"source":"docs/22"},{"id":"D8","title":"OCR first, vision only on escalation","why":"Screens are text-heavy, so OCR is effectively the bounding-box detector; small dedicated OCR models beat large VLMs on documents","rejected":"Generic YOLO detection: trained on photos, does not know UI elements. Vision on every flag: v2 cost problem","status":"partial","stages":["checker"],"source":"docs/22"},{"id":"D9","title":"Attach screen events to existing flags using a window of about plus or minus 3 s, with a longer lead before the flag","why":"Speakers narrate before, during or after an action; on the real clip the copy happens about 2 s before it is spoken","rejected":"Exact timestamp match: misaligns most vague phrases. Not used for silent-step detection (see 2b): segments are about 6 s long, so a 3 s window matches almost everything","status":"built","stages":["align"],"source":"docs/22"},{"id":"D10","title":"Keep the Writer naive (v2)","why":"A repaired step erases the gap the later stages exist to find","rejected":"Writer infers specifics: hides gaps","status":"built","stages":["writer"],"source":"docs/22"},{"id":"D11","title":"Keep gap detection by omission and code-checked quotes (v2)","why":"Model self-reports of \"ok/broken\" are unreliable; absence of a grounded transition is verifiable","rejected":"Ask the model to rate each step","status":"built","stages":["reviewer"],"source":"docs/22"},{"id":"D12","title":"Silent steps enter as structural flags, reusing Checker and inserted inferred steps","why":"No new resolution path; Triage and outputs work unchanged","rejected":"Separate silent-step pipeline: duplicate logic","status":"built","stages":["align","reconcile"],"source":"docs/22"},{"id":"D13","title":"Screen stage and Align are non-fatal with fallback to v2 evidence","why":"A broken diff must not lose the run; v2 behaviour is a known baseline","rejected":"Make screen stage required","status":"built","stages":["screen","align"],"source":"docs/22"},{"id":"D14","title":"Work file is the source of truth for hidden logic; video gives order and intent","why":"Formulas and auto-updates never appear on screen unless the cell is selected; no CV can recover undisplayed information","rejected":"Infer formulas from screen: impossible in general","status":"planned","stages":["reconcile"],"source":"docs/22"},{"id":"D15","title":"Every stage works on a short rolling buffer","why":"Live meeting mode later needs only \"feed frames as they arrive\", results a few seconds behind","rejected":"Whole-video batch algorithms: rewrite needed for live","status":"planned","stages":["screen"],"source":"docs/22"},{"id":"D16","title":"Client recordings use local or contracted models only; free hosted tiers for public or personal material","why":"Free tiers may use requests for model training","rejected":"Free hosted APIs for everything: data risk","status":"partial","stages":["input"],"source":"docs/22"},{"id":"D17","title":"Precompute the diff index for the whole video; call OCR and VLM only on demand","why":"Diffing is free and takes a minute or two; it is the only way to find silent steps and makes expansion a lookup. Model calls are the cost, so they run only where a flag needs them","rejected":"Diff only around Reviewer flags: misses silent steps and re-scans frames on every expansion. Model calls on every event: pays for steps already explained","status":"built","stages":["screen"],"source":"docs/22"},{"id":"D18","title":"Start the Checker at the nearest event and escalate once: plus or minus 2 events, then stop","why":"Most flags settle on one event; widening only when it is unresolved keeps cost low (max 2 calls per flag) while still reaching context a few switches away","rejected":"Fixed plus or minus 10 s window: may hold zero or twenty changes. Always send the whole scene: costly for simple flags. A third, whole-scene level: more cost for little evidence it helps (revisit if level 1 leaves many flags unresolvable)","status":"built","stages":["checker"],"source":"docs/22"},{"id":"D19","title":"Pass scene labels (OCR of tab or title per scene) as text for the surrounding window","why":"Multiple screen switches carry meaning (where data came from, where it went); text conveys the sequence at a fraction of the cost of images","rejected":"Send a frame per scene switch: costly and mostly redundant","status":"partial","stages":["screen"],"source":"docs/22"},{"id":"D20","title":"Escalate deterministically: level 0 (nearest event), then once at plus or minus 2 events if `unresolvable`, then stop; no `needs_more_context` verdict","why":"The model asking for more is self-report (D11): it over-asks or claims to be done. A fixed rule caps cost at 2 calls per flag and leaves `CheckerOutput` unchanged","rejected":"Model-driven `needs_more_context` with a direction: smarter targeting but unreliable, a schema change and up to 3 calls per flag. Never expand: loses answers just outside the first window","status":"built","stages":["checker"],"source":"docs/22"},{"id":"ADR-0001","title":"The Writer is naive on purpose","why":"The pipeline exists to find what the expert did not say. A Writer that tidies the transcript into a clean SOP also repairs the vague references (\"paste it here\"), and the gap disappears before anything can look for it. The Writer keeps the speaker's own words, including pointer words, and never substitutes a more specific name. A prompt rule says so, and an integration test asserts that specifics which are never narrated do not appear in the draft.","rejected":"Let the Writer infer specifics from context: hides gaps and makes every later stage look better than it is.","status":"built","status_note":"Accepted, built","stages":["writer"],"source":"docs/adr/0001-naive-writer.md"},{"id":"ADR-0002","title":"Find structural gaps by omission, grounded in verified quotes","why":"Asking a model \"is this step connected to the next?\" is biased toward yes. Self-reported confidence is the signal least worth trusting. The Reviewer is asked to name what carries between consecutive steps only when it honestly can, with a verbatim transcript quote. Plain Python checks the quote actually occurs in the transcript. Every consecutive pair without a verified transition becomes a structural flag. There is no ok/broken field to self-report.","rejected":"Special-casing zero transitions: it would silently delete a true finding for a genuinely incoherent explanation. Asking the model to rate each step: self-report.","status":"partial","status_note":"Accepted, built; stability still open","stages":["reviewer"],"source":"docs/adr/0002-gaps-by-omission-with-verified-quotes.md"},{"id":"ADR-0003","title":"The Checker observes before it decides, and \"unresolvable\" is a valid answer","why":"A confident wrong resolution is written into the SOP as if it had been seen. That is worse than an open question. The Checker must write what is literally legible in the evidence first, then decide using only that. It is told repeatedly that `unresolvable` is a real result (the answer lives in the recorder's head). A resolved answer to an ambiguity question must add a concrete detail not in the question. A resolved observation that mostly restates the prompt is downgraded to unresolvable.","rejected":"A single verdict-plus-answer field: allowed vague but confident resolutions.","status":"partial","status_note":"Accepted, built; weak-answer problem open","stages":["checker"],"source":"docs/adr/0003-observe-before-verdict.md"},{"id":"ADR-0004","title":"Triage is a pure function with no model call","why":"Whether an issue blocks a build, warns, or proceeds should be repeatable and auditable. `triage_flag(status, severity)` returns `proceed_with_assumption`, `proceed_with_flag` or `block_and_escalate`. Same document in, same output out. It produces `build_spec.json` and its escalation queue.","rejected":"An LLM triage step: not repeatable, and nothing to audit.","status":"built","status_note":"Accepted, built","stages":["triage"],"source":"docs/adr/0004-deterministic-triage.md"},{"id":"ADR-0005","title":"Every line is tagged as said or observed on screen","why":"Two kinds of evidence (what the expert said, what the screen showed) mean different things to a reader. Mixing them hides which parts were assumed. Every step carries a `said` attribution with its transcript segments. Anything the Checker adds is a separate `inferred` clause with its frames, never merged into the narrated text. A raising Pydantic validator makes a document without complete provenance impossible to construct.","rejected":"A soft completeness flag: easy to ignore and to spoof.","status":"built","status_note":"Accepted, built","stages":["writer","checker","outputs"],"source":"docs/adr/0005-said-vs-observed-provenance.md"},{"id":"ADR-0006","title":"Build the screen timeline independently of the transcript","why":"If the transcript decides where to look at the screen, a step that is performed but never mentioned is never examined. A plain-Python timeline turns the video into discrete change events (pixel difference, connected components, a settle rule, before/after keyframes at full resolution). The two tracks meet only at Align. The timeline needs no model call.","rejected":"Native video understanding model: most expensive and weakest at small text. Transcript-driven lookup (v2): misses silent steps by construction.","status":"partial","status_note":"Accepted; timeline built, silent-step value unproven","stages":["screen"],"source":"docs/adr/0006-independent-screen-timeline.md"},{"id":"ADR-0007","title":"The Checker's escalation is deterministic, never model-requested","why":"Letting the model ask for more context is self-report again: models over-ask or claim to be done. It also changes the output schema and makes cost unbounded. Level 0 sends the nearest event as OCR text plus a text model. If the verdict is `unresolvable`, level 1 widens to the events around it and, on OpenAI, attaches images. A flag that is still unresolvable goes back to the recorder. Maximum two calls per flag.","rejected":"A `needs_more_context` verdict with a direction: smarter targeting but unreliable and unbounded.","status":"built","status_note":"Accepted, built","stages":["checker"],"source":"docs/adr/0007-deterministic-checker-escalation.md"},{"id":"ADR-0008","title":"Idempotent runs through a content-addressed cache and one retry layer","why":"The old policy retried every error three times on top of the SDK's own retries, including malformed answers, and its backoff was too short for the rate limits the Checker hit. A rerun repeated every paid call. Every model call is keyed by provider, model, prompts, input, schema, attached image bytes and temperature; a hit costs nothing. Retries are transient-only (rate limit, timeout, connection, 5xx) with jittered exponential backoff, a schema-mismatch is re-asked once, and the SDK's own retries are turned off. Every retry is written to the trace. Temperature is pinned to 0. Each run writes a manifest (code version, prompt hashes, models, thresholds, input hash).","rejected":"Caching only at the pipeline level: any change anywhere re-pays everything.","status":"built","status_note":"Accepted, built","stages":["reliability"],"source":"docs/adr/0008-cache-and-single-retry-layer.md"},{"id":"ADR-0009","title":"Outside context enters as questions, never answers","why":"A model handed a hypothesis tends to confirm it, and a document-versus-reality contradiction is the most valuable finding. Open questions from a discovery tool or from source documents go only to the Reviewer. The Reviewer may close one only with a verbatim, code-verified transcript quote. A hypothesis counts as confirmed only if a Checker resolution reached without seeing it agrees.","rejected":"Giving the Reviewer the facts to \"verify\": self-report with extra steps.","status":"planned","status_note":"Accepted design, not built (intake paused)","stages":["reviewer","input"],"source":"docs/adr/0009-questions-not-answers-for-outside-context.md"},{"id":"X1","title":"Every step raises a 'what changed here?' question, answered from screen diffs","why":"Gaps found only where the Reviewer is unsure missed the important ones: scored against the six required findings, existing runs surfaced 0 to 3. The diffs already carry cell references, formula text, tab names and before/after values.","rejected":"Flag only uncertain steps (v2).","status":"partial","stages":["reconcile"],"source":"docs/24"},{"id":"X2","title":"One batched model call per stage over the whole context, not many small per-item calls","why":"Whole context lets a step span several segments and lets the model see what carries between steps; per-item calls cannot.","rejected":"A call per segment, per step, or per flag for the Writer, Reviewer and Reconciler (the Checker is per flag on purpose: each flag has its own evidence).","status":"built","stages":["writer","reviewer","reconcile"],"source":"project principle"},{"id":"X3","title":"Scenario facts live only in evals and tests, never in prompts or pipeline code","why":"A prompt that names the answer is not testing whether the model can find it. Enforced by a grep guard over every prompt.","rejected":"Worked examples drawn from the real test recording inside prompts.","status":"built","stages":["writer","reviewer","reconcile","checker"],"source":"tests/test_prompts_scenario_agnostic.py"},{"id":"X4","title":"Quote verification tolerates OCR noise: whitespace and pipes are removed before matching","why":"OCR drops and adds spaces, and records join fragments with pipes. Exact matching would reject true statements.","rejected":"Exact substring match; a fuzzy similarity threshold (a fabricated value could pass it).","status":"built","stages":["reconcile"],"source":"core/text_grounding.py"},{"id":"X5","title":"Reconciler flags are created already unresolvable and skip the Checker","why":"The Reconciler has already read the evidence; the Checker would see the same records and add cost without new information. These go to the recorder as questions.","rejected":"Create them open and let the Checker re-read the same evidence.","status":"built","stages":["reconcile","checker"],"source":"core/screen/reconcile.py"},{"id":"X6","title":"The Reconciler replaces Align's counting heuristic for silent steps; Align stays as the fallback","why":"Counting events per step cannot tell a described action from an undescribed one in dense narration.","rejected":"Keep the event-count rule as the only silent-step detector.","status":"built","stages":["reconcile","align"],"source":"docs/24"},{"id":"X7","title":"Findings are scored against the six required findings with pattern groups, forbidden claims and a false-completeness check","why":"Mechanics tests prove the code runs, not that the output is right. Without a target the pipeline could look healthy while missing the point.","rejected":"Reading outputs by eye; a model judging its own pipeline's output.","status":"partial","stages":["outputs"],"source":"evals/score_findings.py"}],"questions":[{"id":"Q1","title":"What should 'stable' mean for the Reviewer's flag counts?","stages":["reviewer"],"why":"Ten runs on one fixed draft gave 7 to 9 total flags but the structural/ambiguity split moved and grounded transitions ranged 0 to 2. The evals cannot score stability until the target is defined.","options":["A stable total","The same flagged locations each run","The same bucket for each issue"]},{"id":"Q2","title":"How do we stop a consequence claim being marked supported by a change that is not the one claimed?","stages":["reconcile","reviewer"],"why":"The Reconciler accepted the status bar's sum of the selected cell as proof that a sheet total updated. Quote checking confirms a quote exists, not what it means.","options":["Require the supporting quote to come from a region other than where the action happened","Treat any claim about a total as open unless a record shows the value it would produce","Ask the recorder instead of the model"]},{"id":"Q3","title":"How do we stop the Checker resolving structural flags into confident false steps?","stages":["checker"],"why":"A real run inserted 'the pasted value updates the total in the Transactions-March sheet', which no event shows. It is the largest remaining source of false statements.","options":["Require an observation naming a changed value, not a description of the screen","Do not insert steps from a single event","Stricter specificity rule for 'resolved'"]},{"id":"Q4","title":"Should events split when two actions fall inside one second?","stages":["screen","reconcile"],"why":"Switching sheet and selecting a cell merged into one event, so 'copy' was mapped to nothing.","options":["Split on a changed-region jump","Shorten the settle window","Leave merged and let the Reconciler read both"]},{"id":"Q5","title":"How are web and ERP surfaces handled?","stages":["screen","reconcile","checker"],"why":"Record extraction reads spreadsheet chrome (cell reference, formula bar, tabs). A web page has a URL, breadcrumb and field labels, and context switches are not 11% pixel changes there. Nothing has been tested.","options":["A per-surface chrome profile","Detect chrome regions from what never changes between events","Record a web walkthrough as a second eval case first"]},{"id":"Q6","title":"Who confirms the event labels?","stages":["screen"],"why":"The draft labels were read off the detector's own keyframes, so a perfect score proves nothing about recall. A person has to watch the video.","options":["The recorder","A reviewer on the engagement"]},{"id":"Q7","title":"When does intake (outside context as questions, never answers) resume?","stages":["reviewer","input"],"why":"It is the integration point for a discovery tool. Source ingestion is built; the intake prompt is not. Paused until the screen path is trusted.","options":["After the findings score is acceptable","In parallel"]},{"id":"Q8","title":"Will the workbook or other work file be available with the recording?","stages":["reconcile"],"why":"Why row 18 was chosen, and what the total formula depends on, are not on screen. Only the file recovers them (D14).","options":["Usually","Sometimes","Never"]},{"id":"Q9","title":"How is client data protected at rest?","stages":["input","reliability"],"why":"Runs and the cache are unencrypted; nothing is redacted before it is sent to the provider.","options":["Encrypted volume and scheduled cleanup (documented)","Redaction before sending","Local models only"]}]}</script>
+<script>
+(function () {
+  var D = JSON.parse(document.getElementById('pg-data').textContent);
+  var stages = D.stages, byId = {};
+  stages.forEach(function (s) { byId[s.id] = s; });
+  var KIND = { llm: 'LLM', code: 'CODE', hybrid: 'LLM + CODE' };
+  var state = { tab: 'pipeline', stage: 'writer' };
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function add(parent) {
+    for (var i = 1; i < arguments.length; i++) {
+      var c = arguments[i];
+      if (c == null) continue;
+      parent.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    }
+    return parent;
+  }
+  function chip(text, cls) { return el('span', 'chip ' + (cls || ''), text); }
+  function fmt(v) { return typeof v === 'string' ? '"' + v + '"' : JSON.stringify(v); }
+  function setHash(h) { try { history.replaceState(null, '', '#' + h); } catch (e) { /* hash updates are best effort */ } }
+
+  /* ---------- pipeline flow ---------- */
+  function box(s) {
+    var b = el('button', 'box ' + (s.lane === 'input' ? 'input' : s.lane === 'output' ? 'output' : ''));
+    b.type = 'button';
+    b.setAttribute('data-stage', s.id);
+    b.setAttribute('aria-pressed', String(state.stage === s.id));
+    var head = el('div', 'head');
+    add(head, chip(s.num, 'num'), chip(KIND[s.kind], s.kind), chip(s.status, s.status));
+    if (s.optin) add(head, chip('--screen', 'optin'));
+    add(b, head, el('div', 'name', s.name), el('div', 'short', s.short));
+    return b;
+  }
+  function lane(label, ids) {
+    var l = el('div', 'lane');
+    add(l, el('p', 'group-label', label));
+    ids.forEach(function (id, i) {
+      if (i) add(l, el('div', 'conn'));
+      add(l, box(byId[id]));
+    });
+    return l;
+  }
+  function renderFlow() {
+    var f = document.getElementById('flow');
+    f.textContent = '';
+    var inp = el('div', 'row');
+    add(inp, el('p', 'group-label', 'Input'), box(byId.input));
+    add(f, inp, el('div', 'conn'));
+    var lanes = el('div', 'lanes');
+    add(lanes, lane('What was said', ['transcribe', 'writer', 'reviewer']), lane('What changed on screen (optional)', ['screen', 'align']));
+    add(f, lanes, el('div', 'join', 'both meet here'));
+    var m = el('div', 'row');
+    var mr = el('div', 'merge-row');
+    ['reconcile', 'checker', 'triage', 'outputs'].forEach(function (id) { add(mr, box(byId[id])); });
+    add(m, el('p', 'group-label', 'Reconcile, check, decide, deliver'), mr);
+    add(f, m);
+    var x = el('div', 'row');
+    add(x, el('p', 'group-label', 'Applies to every model call'), box(byId.reliability));
+    x.style.marginTop = '6px';
+    add(f, x);
+  }
+
+  /* ---------- stage detail ---------- */
+  function section(title, open, body, extra) {
+    var d = el('details', 'sec');
+    if (open) d.open = true;
+    var s = el('summary');
+    add(s, title);
+    if (extra) add(s, extra);
+    var b = el('div', 'body');
+    add(b, body);
+    add(d, s, b);
+    return d;
+  }
+  function list(items) {
+    var u = el('ul', 'plain');
+    items.forEach(function (t) { add(u, el('li', '', t)); });
+    return u;
+  }
+  function copyBtn(getText) {
+    var b = el('button', 'btn', 'Copy');
+    b.type = 'button';
+    b.addEventListener('click', function () {
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1400); };
+      var fail = function () { b.textContent = 'Select the text and copy it'; };
+      try { navigator.clipboard.writeText(getText()).then(done, fail); } catch (e) { fail(); }
+    });
+    return b;
+  }
+  function tree(steps) {
+    var ol = el('ol', 'tree');
+    steps.forEach(function (st) {
+      var li = el('li');
+      add(li, el('div', 'step', st.step));
+      if (st.note) add(li, el('div', 'note', st.note));
+      if (st.branches.length) {
+        var bs = el('div', 'branches');
+        st.branches.forEach(function (b) {
+          var r = el('div', 'branch ' + b.tone);
+          var then = el('div', 'then');
+          add(then, String.fromCharCode(8594) + ' ', el('b', '', b.then));
+          add(r, el('span', 'if', 'IF'), el('div', 'cond', b.if), then);
+          add(bs, r);
+        });
+        add(li, bs);
+      }
+      add(ol, li);
+    });
+    return ol;
+  }
+  function decisionChips(sid) {
+    var wrap = el('div', 'decchips');
+    var ds = D.decisions.filter(function (d) { return d.stages.indexOf(sid) >= 0; });
+    ds.forEach(function (d) {
+      var b = el('button', 'chip');
+      b.type = 'button';
+      b.textContent = d.id + '  ' + d.title;
+      b.title = 'Open in Decisions';
+      b.addEventListener('click', function () { openDecision(d.id); });
+      add(wrap, b);
+    });
+    return { node: wrap, n: ds.length };
+  }
+  function renderDetail() {
+    var s = byId[state.stage], d = document.getElementById('detail');
+    d.textContent = '';
+    var head = el('header');
+    var h = el('h2');
+    add(h, chip(s.num, 'num'), s.name);
+    var chips = el('div', 'chips');
+    add(chips, chip(KIND[s.kind], s.kind), chip(s.status, s.status));
+    if (s.optin) add(chips, chip('runs only with --screen', 'optin'));
+    add(chips, el('span', 'chip', s.model));
+    add(head, h, el('p', 'sub', s.short), chips);
+    add(d, head);
+
+    var io = el('div', 'io');
+    var a = el('div'); add(a, el('h4', '', 'Takes in'), list(s.inputs));
+    var b = el('div'); add(b, el('h4', '', 'Produces'), list(s.outputs));
+    add(io, a, b);
+    add(d, io);
+
+    add(d, section('Steps and conditions', true, tree(s.tree), chip(s.tree.length + ' steps')));
+    add(d, section('When it fails', true, el('div', 'fail', s.failure)));
+
+    if (s.prompts.length) {
+      var pw = el('div');
+      s.prompts.forEach(function (p, i) {
+        var box = el('div'); if (i) box.style.marginTop = '14px';
+        var ph = el('div', 'prompt-head');
+        var t = el('span'); add(t, el('b', 'mono', p.name), ' ', chip(p.text.length + ' characters'));
+        add(ph, t, copyBtn(function () { return p.text; }));
+        add(box, ph, el('pre', 'prompt', p.text));
+        add(pw, box);
+      });
+      add(d, section('Prompt' + (s.prompts.length > 1 ? 's' : ''), false, pw, chip(s.prompts.length + '')));
+    }
+    if (s.knobs.length) {
+      var tbl = el('table', 'kv');
+      s.knobs.forEach(function (k) { var tr = el('tr'); add(tr, el('td', '', k.name), el('td', '', fmt(k.value))); add(tbl, tr); });
+      var sx = el('div', 'scroll-x'); add(sx, tbl);
+      add(d, section('Settings (live values from core/config.py)', false, sx, chip(s.knobs.length + '')));
+    }
+    var dc = decisionChips(s.id);
+    if (dc.n) add(d, section('Decisions that shaped it', false, dc.node, chip(dc.n + '')));
+    if (s.measured.length) add(d, section('Measured', false, list(s.measured), chip(s.measured.length + '')));
+    if (s.issues.length) add(d, section('Known issues', true, list(s.issues), chip(s.issues.length + '')));
+  }
+  function selectStage(id, scroll) {
+    if (!byId[id]) return;
+    state.stage = id;
+    renderFlow();
+    renderDetail();
+    setHash('stage-' + id);
+    if (scroll) document.getElementById('detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* ---------- decisions ---------- */
+  function buildDecisions() {
+    var sel = document.getElementById('dec-stage');
+    sel.textContent = '';
+    var any = el('option', '', 'Any stage'); any.value = '';
+    add(sel, any);
+    stages.forEach(function (s) { var o = el('option', '', s.num + '  ' + s.name); o.value = s.id; add(sel, o); });
+    var listEl = document.getElementById('dec-list');
+    listEl.textContent = '';
+    D.decisions.forEach(function (dec) {
+      var d = el('details', 'dec');
+      d.id = 'decision-' + dec.id;
+      d.setAttribute('data-id', dec.id);
+      d.setAttribute('data-status', dec.status);
+      d.setAttribute('data-stages', dec.stages.join(' '));
+      d.setAttribute('data-text', (dec.id + ' ' + dec.title + ' ' + dec.why + ' ' + dec.rejected).toLowerCase());
+      var sm = el('summary');
+      add(sm, chip(dec.id, 'num'), el('span', 'title', dec.title), chip(dec.status, dec.status));
+      dec.stages.forEach(function (sid) {
+        if (!byId[sid]) return;
+        var c = el('button', 'chip', byId[sid].name);
+        c.type = 'button';
+        c.addEventListener('click', function (ev) { ev.preventDefault(); ev.stopPropagation(); setTab('pipeline'); selectStage(sid, true); });
+        add(sm, c);
+      });
+      var body = el('div', 'dec-body');
+      var why = el('div'); add(why, el('p', 'label', 'Why'), el('p', '', dec.why));
+      var rej = el('div'); add(rej, el('p', 'label', 'Rejected'), el('p', '', dec.rejected));
+      var src = el('div'); add(src, el('p', 'label', 'Source'), el('p', 'mono', dec.source + (dec.status_note ? '  (' + dec.status_note + ')' : '')));
+      add(body, why, rej, src);
+      add(d, sm, body);
+      add(listEl, d);
+    });
+    var empty = el('p', 'empty', 'No decision matches those filters.');
+    empty.id = 'dec-empty'; empty.hidden = true;
+    add(listEl, empty);
+    ['dec-q', 'dec-stage', 'dec-status'].forEach(function (id) {
+      document.getElementById(id).addEventListener(id === 'dec-q' ? 'input' : 'change', filterDecisions);
+    });
+    filterDecisions();
+  }
+  function filterDecisions() {
+    var q = document.getElementById('dec-q').value.trim().toLowerCase();
+    var st = document.getElementById('dec-stage').value, ss = document.getElementById('dec-status').value;
+    var shown = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('#dec-list details.dec'), function (d) {
+      var ok = (!q || d.getAttribute('data-text').indexOf(q) >= 0) &&
+               (!st || d.getAttribute('data-stages').split(' ').indexOf(st) >= 0) &&
+               (!ss || d.getAttribute('data-status') === ss);
+      d.hidden = !ok;
+      if (ok) shown++;
+    });
+    document.getElementById('dec-empty').hidden = shown !== 0;
+    document.getElementById('dec-count').textContent = shown + ' of ' + D.decisions.length;
+  }
+  function openDecision(id) {
+    setTab('decisions');
+    document.getElementById('dec-q').value = '';
+    document.getElementById('dec-stage').value = '';
+    document.getElementById('dec-status').value = '';
+    filterDecisions();
+    var d = document.getElementById('decision-' + id);
+    if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    setHash('decision-' + id);
+  }
+
+  /* ---------- open questions ---------- */
+  function buildOpen() {
+    var l = document.getElementById('open-list');
+    l.textContent = '';
+    D.questions.forEach(function (q) {
+      var c = el('div', 'qcard');
+      var h = el('h3'); add(h, chip(q.id, 'num'), q.title);
+      var st = el('div', 'chips');
+      q.stages.forEach(function (sid) {
+        if (!byId[sid]) return;
+        var b = el('button', 'chip', byId[sid].name);
+        b.type = 'button';
+        b.addEventListener('click', function () { setTab('pipeline'); selectStage(sid, true); });
+        add(st, b);
+      });
+      add(c, h, el('p', '', q.why), el('p', 'label', 'Options'), list(q.options), st);
+      add(l, c);
+    });
+  }
+
+  /* ---------- tabs and routing ---------- */
+  function setTab(t) {
+    state.tab = t;
+    ['pipeline', 'decisions', 'open'].forEach(function (k) {
+      document.getElementById('view-' + k).hidden = k !== t;
+      document.getElementById('tab-' + k).setAttribute('aria-selected', String(k === t));
+    });
+    if (t !== 'pipeline') setHash(t);
+  }
+  function route() {
+    var h = (location.hash || '').replace('#', '');
+    if (h.indexOf('stage-') === 0 && byId[h.slice(6)]) { setTab('pipeline'); selectStage(h.slice(6), false); return; }
+    if (h.indexOf('decision-') === 0) { openDecision(h.slice(9)); return; }
+    if (h === 'decisions' || h === 'open') { setTab(h); return; }
+    setTab('pipeline');
+  }
+
+  document.getElementById('n-decisions').textContent = D.decisions.length;
+  document.getElementById('n-open').textContent = D.questions.length;
+  document.getElementById('flow').addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('button.box') : null;
+    if (b) selectStage(b.getAttribute('data-stage'), window.innerWidth < 760);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (b) {
+    b.addEventListener('click', function () { setTab(b.getAttribute('data-tab')); });
+  });
+  window.addEventListener('hashchange', route);
+
+  buildDecisions();
+  buildOpen();
+  renderFlow();
+  renderDetail();
+  route();
+})();
+</script>
+
+</body>
+</html>
