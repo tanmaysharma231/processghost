@@ -59,6 +59,12 @@ Recorded here because they shape every document below and were made explicitly, 
 | `22-architecture-v3.md` | v3 design: independent screen timeline (built), Align for unspoken steps and a cheaper change-driven Checker (not built), 20 decisions with rejected alternatives, data contracts, measured worked example, roadmap with exit checks. |
 | `23-checker-learnings.md` | What the v2 Checker was sent and said, measured by replaying five real runs: two thirds of sampled frames carried no change, a sheet switch is only ~10.8% of pixels, and the model often echoes the prompt. Evidence behind the v3 design. |
 
+### Deep dives
+
+| Doc | Hook |
+|---|---|
+| `24-speech-to-diff-deep-dive.md` | Word-level speech timing against what changed on screen, event by event, on the real clip: which of the six required findings the diffs already contain, where narration lags the action, and the reconciler design this points to. |
+
 ### Decisions and limits
 
 | Doc | Hook |
