@@ -11,6 +11,8 @@ pipeline that called them.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.llm import prompts
 
 SCENARIO_STRINGS = [
@@ -46,3 +48,20 @@ def test_prompt_names_cover_the_known_v2_trio():
     """Guards against _prompt_names() silently finding zero prompts (e.g. a naming convention
     change) and the scenario-leak test above passing vacuously."""
     assert {"WRITER_SYSTEM", "REVIEWER_SYSTEM", "CHECKER_SYSTEM"} <= set(_prompt_names())
+
+
+GENERIC_MODULES = [
+    "core/slots.py", "core/ladder.py", "core/screen/classify.py", "core/screen/anchors.py", "core/screen/slot_fills.py",
+    "core/screen/read_fallback.py", "core/data/profile.py", "core/data/tools.py", "core/data/checker.py", "core/data/apply.py",
+]
+
+
+def test_generic_modules_name_no_scenario_value():
+    """The slot, ladder, classification, anchor and document-rung code is scenario-agnostic by construction:
+    none of the real scenario's sheet, column or status names may appear in it (docs/12)."""
+    root = Path(__file__).resolve().parent.parent
+    offenders = []
+    for rel in GENERIC_MODULES:
+        text = (root / rel).read_text(encoding="utf-8").lower()
+        offenders += [f"{rel}: {s}" for s in SCENARIO_STRINGS if s.lower() in text]
+    assert not offenders, offenders

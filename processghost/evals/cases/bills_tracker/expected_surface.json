@@ -1,0 +1,13 @@
+{
+  "video": "../../../../data/english_hackathon_test.mp4",
+  "note": "DRAFT surface labels, one per event label in expected_events.json (L1..L7, same times). Written from the sheet strip and cell references seen in the clip's chrome during development, so they are NOT independent of the detector's own readings and cannot show it is correct. A human must watch the video, correct them, and set confirmed=true. Only fields listed under expect are scored: sheet 3 shows no readable cell reference, so none is asserted for L5.",
+  "events": [
+    {"label_id": "L1", "t_start": 2.8, "t_end": 3.3, "confirmed": false, "expect": {"index": 1}},
+    {"label_id": "L2", "t_start": 4.2, "t_end": 5.4, "confirmed": false, "expect": {"change": "sheet_switch", "index": 2, "location": "MonthlyActuals", "focus": "F18"}},
+    {"label_id": "L3", "t_start": 6.2, "t_end": 6.6, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 2, "focus": "C18"}},
+    {"label_id": "L4", "t_start": 8.2, "t_end": 8.6, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 2, "focus": "F18"}},
+    {"label_id": "L5", "t_start": 9.6, "t_end": 10.2, "confirmed": false, "expect": {"change": "sheet_switch", "index": 3, "location": "Transactions"}},
+    {"label_id": "L6", "t_start": 15.9, "t_end": 16.5, "confirmed": false, "expect": {"change": "sheet_switch", "index": 2, "location": "MonthlyActuals", "focus": "F18"}},
+    {"label_id": "L7", "t_start": 18.2, "t_end": 18.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 2, "focus": "F18"}}
+  ]
+}

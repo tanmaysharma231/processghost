@@ -22,9 +22,10 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from core import config
-from core.models.reconcile import ReconcilerOutput
-from core.models.screen import ChangeRecord
-from core.models.sop import Flag, ObservedChange, SOPDocument, SOPStep
+from core.models.reconcile import EventAssignment, ReconcilerOutput
+from core.models.screen import ChangeRecord, SelectionAnchor
+from core.models.sop import Attribution, Flag, ObservedChange, SlotFill, SOPDocument, SOPStep
+from core.slots import add_slot_flags, fill_slot, open_slots
 from core.models.tokens import TranscriptSegment
 from core.screen.align import _neighbours, _step_spans
 from core.text_grounding import compact, quote_in_ocr
@@ -44,7 +45,9 @@ def _timed_words(segments_raw: List[dict], seg_ids: List[int]) -> str:
     return " ".join(out)
 
 
-def build_reconciler_input(doc: SOPDocument, records: List[ChangeRecord], segments_raw: List[dict]) -> str:
+def build_reconciler_input(
+    doc: SOPDocument, records: List[ChangeRecord], segments_raw: List[dict], anchors: Optional[List[SelectionAnchor]] = None
+) -> str:
     steps = []
     for s in sorted(doc.steps, key=lambda s: s.order):
         seg_ids = [i for a in s.attributions if a.kind == "said" for i in a.segment_ids]
@@ -55,25 +58,101 @@ def build_reconciler_input(doc: SOPDocument, records: List[ChangeRecord], segmen
                 "title": s.title,
                 "instruction": s.instruction,
                 "spoken": _timed_words(segments_raw, seg_ids),
+                "kind": s.kind,
+                "open_slots": open_slots(s),
             }
         )
-    events = [
-        {
-            "event_id": r.event_id,
-            "t_start": r.t_start,
-            "t_end": r.t_end,
-            "type": r.type,
-            "chrome_before": r.chrome_before,
-            "chrome_after": r.chrome_after,
-            "regions": [{"before": g.before, "after": g.after} for g in r.regions],
-        }
-        for r in records
-    ]
+    by_event = {a.event_id: a for a in anchors or []}
+    events = [_event_payload(r, by_event.get(r.event_id)) for r in records]
     return str({"steps": steps, "events": events})
+
+
+def _event_payload(r: ChangeRecord, anchor: Optional[SelectionAnchor] = None) -> dict:
+    payload = {
+        "event_id": r.event_id,
+        "t_start": r.t_start,
+        "t_end": r.t_end,
+        "type": r.type,
+        "chrome_before": r.chrome_before,
+        "chrome_after": r.chrome_after,
+        "regions": [{"before": g.before, "after": g.after} for g in r.regions],
+    }
+    # Structured locator facts, present only when the surface stage produced them. Each value is a
+    # substring of the chrome text above, so quoting it still grounds against the record.
+    if r.surface_change is not None:
+        payload["surface_change"] = r.surface_change
+    if r.surface_after is not None and r.surface_after.surface != "generic":
+        payload["location_after"] = {
+            k: v for k, v in r.surface_after.model_dump(include={"app", "document", "location", "focus", "focus_content"}).items() if v
+        }
+    if r.transient:
+        payload["transient"] = True
+    if r.event_class is not None:
+        payload["event_class"] = r.event_class
+    if anchor is not None:
+        payload["anchor"] = {"cell": anchor.focus, "role": anchor.role, "confirmed": anchor.confirmed}
+    if r.speech_clue is not None:
+        payload["speech_clue"] = {"named_in_speech": r.speech_clue.found, "lag_s": r.speech_clue.lag_s}
+    return payload
 
 
 def _window(step: SOPStep, spans: Dict[str, Tuple[float, float]]) -> Optional[Tuple[float, float]]:
     return spans.get(step.step_id)
+
+
+SHOWN_CLASSES = ("navigation", "data_change")
+_TITLE_MAX_CHARS = 70
+
+
+def _shown_step(r: ChangeRecord, a: Optional[EventAssignment], taken_ids: set) -> Optional[SOPStep]:
+    """A step for an event nobody narrated: only a navigation or data change whose action sentence is backed
+    by at least one verbatim quote from THIS event's record. Anything else stays a silent-change flag."""
+    if r.event_class not in SHOWN_CLASSES or a is None or not a.action.strip():
+        return None
+    quotes = [q.quote for q in a.evidence if q.event_id == r.event_id and quote_in_ocr(q.quote, r.text())]
+    if not quotes:
+        return None
+    action = " ".join(a.action.split())
+    n = 1
+    while "step-s%02d" % n in taken_ids:
+        n += 1
+    title = action if len(action) <= _TITLE_MAX_CHARS else action[: _TITLE_MAX_CHARS - 3].rstrip() + "..."
+    kind = "navigate" if r.event_class == "navigation" else "edit"
+    focus = r.surface_after.focus if r.surface_after else ""
+    slots = {"target": SlotFill(value=focus, by="shown", event_ids=[r.event_id])} if kind == "edit" and focus else {}
+    return SOPStep(
+        step_id="step-s%02d" % n,
+        order=0,  # renumbered once every shown step is placed
+        title=title,
+        instruction=action,
+        attributions=[Attribution(kind="shown", t_s=r.t_start, event_ids=[r.event_id])],
+        observed_changes=[ObservedChange(text=action, event_ids=[r.event_id], t_s=r.t_start, quotes=quotes)],
+        kind=kind,
+        slots=slots,
+    )
+
+
+def _step_time(step: SOPStep, spans: Dict[str, Tuple[float, float]]) -> Optional[float]:
+    if step.step_id in spans:
+        return spans[step.step_id][0]
+    shown = [a.t_s for a in step.attributions if a.kind == "shown"]
+    return min(shown) if shown else None
+
+
+def _insert_by_time(steps: List[SOPStep], shown: List[SOPStep], spans: Dict[str, Tuple[float, float]]) -> List[SOPStep]:
+    """Place each shown step after the last timed step that starts at or before it, then renumber 1..n."""
+    if not shown:
+        return steps
+    out = sorted(steps, key=lambda s: s.order)
+    for new in sorted(shown, key=lambda s: s.attributions[0].t_s):
+        t = new.attributions[0].t_s
+        at = 0
+        for i, s in enumerate(out):
+            st = _step_time(s, spans)
+            if st is not None and st <= t:
+                at = i + 1
+        out.insert(at, new)
+    return [s.model_copy(update={"order": i + 1}) for i, s in enumerate(out)]
 
 
 def merge_reconciler_output(
@@ -96,6 +175,7 @@ def merge_reconciler_output(
 
     explained_events: set = set()
     seen_steps: set = set()
+    slot_fills: List[Tuple[str, str, SlotFill]] = []
     for rec in output.steps:
         step = steps_by_id.get(rec.step_id)
         if step is None or rec.step_id in seen_steps:
@@ -135,13 +215,22 @@ def merge_reconciler_output(
                 add_flag(
                     family="structural",
                     question=(
-                        f"Step {step.order} ('{step.title}') was narrated but no change on screen matches it. "
+                        f"The step '{step.title}' was narrated but no change on screen matches it. "
                         f"Was it done off screen, or did it not take effect?{note}"
                     ),
                     severity="caution",
                     window_time_range=win,
                     step_id=step.step_id,
                     status="unresolvable",
+                    finding_kind="unsupported_assertion",
+                )
+
+        for claim in rec.slot_fills:
+            ev_ids = sorted({q.event_id for q in claim.evidence if q.event_id in rec_by_id and quote_in_ocr(q.quote, rec_by_id[q.event_id].text())})
+            if claim.slot in open_slots(step) and claim.value.strip() and ev_ids:
+                slot_fills.append(
+                    (step.step_id, claim.slot, SlotFill(value=claim.value.strip(), by="shown", event_ids=ev_ids,
+                                                         quote=next(q.quote for q in claim.evidence if q.event_id == ev_ids[0])))
                 )
 
         added = 0
@@ -161,6 +250,7 @@ def merge_reconciler_output(
                 step_id=step.step_id,
                 event_ids=[e for e in rec.event_ids if e in rec_by_id],
                 status="unresolvable",
+                finding_kind="unresolved_requirement",
             )
 
     for c in output.claims:
@@ -189,12 +279,21 @@ def merge_reconciler_output(
             window_time_range=win,
             step_id=step.step_id,
             status="unresolvable",
+            finding_kind="unsupported_assertion",
         )
 
     assigned = {a.event_id: a.step_id for a in output.events if a.event_id in rec_by_id}
+    assignment = {a.event_id: a for a in output.events if a.event_id in rec_by_id}
+    shown_steps: List[SOPStep] = []
+    taken_ids = set(steps_by_id)
     for r in sorted(records, key=lambda r: r.t_start):
         owner = assigned.get(r.event_id)
         if owner in steps_by_id or r.event_id in explained_events:
+            continue
+        shown = _shown_step(r, assignment.get(r.event_id), taken_ids)
+        if shown is not None:
+            taken_ids.add(shown.step_id)
+            shown_steps.append(shown)
             continue
         prev_id, next_id = _neighbours(r.t_start, ordered, spans)
         pair = (prev_id, next_id) if prev_id and next_id else None
@@ -211,6 +310,11 @@ def merge_reconciler_output(
             step_id=None if pair else (prev_id or next_id),
             between_step_ids=pair,
             event_ids=[r.event_id],
+            finding_kind="observed_unexplained",
         )
 
-    return doc.model_copy(update={"steps": [new_steps[s.step_id] for s in doc.steps], "flags": flags})
+    steps = _insert_by_time([new_steps[s.step_id] for s in doc.steps], shown_steps, spans)
+    merged = doc.model_copy(update={"steps": steps, "flags": flags})
+    for step_id, slot, fill in slot_fills:
+        merged = fill_slot(merged, step_id, slot, fill)
+    return add_slot_flags(merged, only_steps={s.step_id for s in shown_steps})

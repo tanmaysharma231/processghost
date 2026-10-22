@@ -49,7 +49,7 @@ def test_branch_tones_and_stage_references_are_valid():
 def test_all_decision_tables_are_picked_up():
     ids = [d["id"] for d in spec.all_decisions()]
     assert [f"D{i}" for i in range(1, 21)] == [i for i in ids if i.startswith("D")]
-    assert len([i for i in ids if i.startswith("ADR-")]) == 9
+    assert len([i for i in ids if i.startswith("ADR-")]) == 14
     assert len(ids) == len(set(ids)), "duplicate decision id"
 
 

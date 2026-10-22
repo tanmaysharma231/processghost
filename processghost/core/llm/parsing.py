@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 from typing import List
 
+from core.slots import add_slot_flags, applicable_slots
 from core.text_grounding import normalize_for_quote_match, quote_is_grounded
 from core.models.sop import (
     Attribution,
     AppendixSegment,
     Flag,
     ReviewerOutput,
+    SlotFill,
     SOPDocument,
     SOPStep,
     StepTransition,
@@ -158,6 +160,7 @@ def merge_reviewer_output(
                 window_segment_ids=item.window_segment_ids,
                 step_id=item.step_id,
                 between_step_ids=between,
+                slot=item.slot if item.step_id else None,
             )
         )
 
@@ -197,9 +200,36 @@ def merge_reviewer_output(
         next_flag_num += 1
 
     try:
-        return doc.model_copy(update={"transitions": transitions, "flags": flags})
+        merged = doc.model_copy(update={"transitions": transitions, "flags": flags})
     except ValidationError as exc:
         raise LLMResponseParseError(f"Reviewer output failed provenance validation: {exc}") from exc
+    return add_slot_flags(_apply_step_slots(merged, output, transcript_text))
+
+
+def _apply_step_slots(doc: SOPDocument, output: ReviewerOutput, transcript_text: str | None) -> SOPDocument:
+    """Record each step's kind and the slot answers the speaker actually gave. An answer counts only with a
+    verbatim transcript quote (the same rule as transitions); an ungrounded or empty claim leaves the slot open,
+    and add_slot_flags then turns every open applicable slot into a question. `transcript_text=None` (no
+    transcript supplied) accepts a claim that carries any quote, as the transition check does."""
+    claims = {rs.step_id: rs for rs in output.steps}
+    steps = []
+    for step in doc.steps:
+        rs = claims.get(step.step_id)
+        if rs is None or rs.kind is None:
+            steps.append(step)
+            continue
+        slots = dict(step.slots)
+        for name in applicable_slots(rs.kind):
+            claim = getattr(rs, name)
+            value = (claim.value if claim else "").strip()
+            quote = (claim.quote if claim else "").strip()
+            if not value or not quote:
+                continue
+            if transcript_text is not None and not _quote_is_grounded(quote, transcript_text):
+                continue
+            slots.setdefault(name, SlotFill(value=value, by="said", quote=quote))
+        steps.append(step.model_copy(update={"kind": rs.kind, "slots": slots}))
+    return doc.model_copy(update={"steps": steps})
 
 
 def _bounding_segment_ids(ordered_steps: List[SOPStep], from_id: str, to_id: str) -> List[int]:

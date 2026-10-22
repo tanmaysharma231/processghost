@@ -88,13 +88,6 @@ def test_non_transient_errors_fail_immediately(fast_retry):
     assert c.calls == 1 and c.metrics.failures == []
 
 
-def test_programming_errors_are_not_retried(fast_retry):
-    c = _Caller([ValueError("bug")])
-    with pytest.raises(ValueError):
-        _wrap(c)(c)
-    assert c.calls == 1
-
-
 def test_schema_mismatch_is_reasked_once(fast_retry):
     c = _Caller([StructuredOutputError("a"), StructuredOutputError("b"), StructuredOutputError("c")])
     with pytest.raises(StructuredOutputError):

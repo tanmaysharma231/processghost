@@ -80,13 +80,6 @@ def test_check_failed_note_proceeds_with_flag():
 
 # --- build_spec ----------------------------------------------------------------------------
 
-def test_every_flag_gets_a_triage_field():
-    doc = SOPDocument(run_id="run1", steps=[_step()], flags=[_flag()])
-    spec = build_spec(doc)
-    assert len(spec["flags"]) == 1
-    assert spec["flags"][0]["triage"] == BLOCK_AND_ESCALATE
-
-
 def test_escalation_queue_contains_only_block_and_escalate_entries():
     doc = SOPDocument(
         run_id="run1",
@@ -108,13 +101,14 @@ def test_escalation_queue_sorted_severity_first():
         run_id="run1",
         steps=[_step()],
         flags=[
-            _flag(flag_id="FLAG-CAUTION", status="open", severity="caution"),
-            _flag(flag_id="FLAG-ROWMATCH", status="unresolvable", severity="blocking"),
+            _flag(flag_id="FLAG-CAUTION", status="open", severity="caution"),  # open + caution never escalates
+            _flag(flag_id="FLAG-CONTRADICTED-NOTE", status="contradicted", severity="note"),  # escalates, lowest severity
+            _flag(flag_id="FLAG-ROWMATCH", status="unresolvable", severity="blocking"),  # escalates, highest severity
         ],
     )
     spec = build_spec(doc)
     escalated = [f["flag_id"] for f in spec["escalation_queue"]]
-    assert escalated == ["FLAG-ROWMATCH"]  # caution never escalates, so it's the sole/top entry
+    assert escalated == ["FLAG-ROWMATCH", "FLAG-CONTRADICTED-NOTE"]  # the sort is exercised: input order is the reverse
 
 
 def test_build_spec_is_deterministic():

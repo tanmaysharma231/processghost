@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+import anthropic
 import httpx
 import openai
 from tenacity import RetryCallState, retry, retry_if_exception, wait_exponential_jitter
@@ -34,6 +35,10 @@ _TRANSIENT = (
     openai.APITimeoutError,
     openai.APIConnectionError,
     openai.InternalServerError,
+    anthropic.RateLimitError,
+    anthropic.APITimeoutError,
+    anthropic.APIConnectionError,
+    anthropic.InternalServerError,
     httpx.TimeoutException,
     httpx.TransportError,
 )

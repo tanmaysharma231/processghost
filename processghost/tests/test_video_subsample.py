@@ -10,23 +10,6 @@ def _paths(n: int) -> list[Path]:
     return [Path(f"frame_{i:04d}.png") for i in range(n)]
 
 
-def test_returns_unchanged_when_under_cap():
-    items = _paths(5)
-    assert subsample_evenly(items, max_count=10) == items
-
-
-def test_returns_unchanged_when_exactly_at_cap():
-    items = _paths(10)
-    assert subsample_evenly(items, max_count=10) == items
-
-
-def test_subsamples_down_to_cap():
-    items = _paths(100)
-    result = subsample_evenly(items, max_count=20)
-    assert len(result) <= 20
-    assert len(result) > 0
-
-
 def test_always_keeps_first_and_last():
     items = _paths(50)
     result = subsample_evenly(items, max_count=5)
@@ -46,9 +29,20 @@ def test_non_positive_cap_returns_unchanged():
     assert subsample_evenly(items, max_count=-1) == items
 
 
-def test_result_is_ordered_subset():
+def test_a_list_that_already_fits_is_returned_as_is():
+    for n in (5, 10):  # under the cap, and exactly at it
+        items = _paths(n)
+        assert subsample_evenly(items, max_count=10) is items
+
+
+def test_subsampling_is_evenly_spaced_and_hits_the_cap():
+    items = _paths(100)
+    assert len(subsample_evenly(items, max_count=20)) == 20
+    picked = [items.index(p) for p in subsample_evenly(items, max_count=5)]
+    assert picked == [0, 25, 50, 74, 99]  # step 24.75, first and last always kept
+
+
+def test_result_is_an_ordered_subset_without_duplicates():
     items = _paths(37)
-    result = subsample_evenly(items, max_count=10)
-    indices = [items.index(p) for p in result]
-    assert indices == sorted(indices)
-    assert len(set(indices)) == len(indices)  # no duplicates
+    indices = [items.index(p) for p in subsample_evenly(items, max_count=10)]
+    assert indices == sorted(set(indices)) and len(indices) == 10 and indices[0] == 0 and indices[-1] == 36

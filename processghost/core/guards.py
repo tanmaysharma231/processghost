@@ -18,6 +18,23 @@ class InputRejected(ValueError):
     """The input recording was refused; the message says why and what limit applies."""
 
 
+def validate_workbook(path: Path) -> None:
+    """Raise InputRejected if the workbook for the document rung cannot be read safely."""
+    path = Path(path)
+    if not path.is_file():
+        raise InputRejected(f"workbook is not a file: {path}")
+    if path.suffix.lower() not in (".xlsx", ".xlsm"):
+        raise InputRejected(f"workbook must be .xlsx or .xlsm, got {path.suffix or 'no extension'}: {path}")
+    size = path.stat().st_size
+    if size == 0:
+        raise InputRejected(f"workbook is empty: {path}")
+    if size > config.DATA_MAX_WORKBOOK_BYTES:
+        raise InputRejected(
+            f"workbook is {size / 1e6:.0f} MB; the limit is {config.DATA_MAX_WORKBOOK_BYTES / 1e6:.0f} MB "
+            "(config.DATA_MAX_WORKBOOK_BYTES)"
+        )
+
+
 def validate_input(video_path: Path) -> float:
     """Raise InputRejected if `video_path` is unusable. Returns the duration in seconds."""
     path = Path(video_path)

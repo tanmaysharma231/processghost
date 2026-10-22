@@ -12,19 +12,32 @@ provenance_violations() below and SOPDocument's validator.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
+from core.models.data import DataCitation, RungAttempt, WorkbookMatch
+from core.models.screen import SelectionAnchor, UnusedEvent
 from core.models.tokens import TranscriptSegment
 
-Kind = Literal["said", "inferred"]
+Kind = Literal["said", "inferred", "shown"]
 Family = Literal["ambiguity", "structural"]
 Severity = Literal["blocking", "caution", "note"]
 Status = Literal["open", "resolved", "contradicted", "unresolvable", "unchecked", "check_failed"]
 Verdict = Literal["resolved", "contradicted", "unresolvable"]
-Origin = Literal["reviewer", "coverage", "screen", "reconcile"]
+Origin = Literal["reviewer", "coverage", "screen", "reconcile", "data"]
 CheckerTier = Literal["ocr", "vision", "fallback_frames"]
+SlotName = Literal["source", "key", "target", "effect"]
+StepKind = Literal["navigate", "move_data", "edit", "check", "other"]
+SlotBy = Literal["said", "shown", "document", "sme"]
+FindingKind = Literal[
+    "explained_action",  # the open question was answered from evidence
+    "observed_unexplained",  # a change is visible on screen that nobody narrated
+    "unresolved_requirement",  # a rule, threshold, actor or condition needed to implement is not established
+    "potential_conflict",  # sources appear to disagree; may be compatible under different scopes, so ask first
+    "unsupported_assertion",  # speech claims something the supplied evidence does not show (NOT disproved)
+    "no_finding",  # a pipeline limitation or insufficient basis, not a statement about the process
+]
 
 
 class Attribution(BaseModel):
@@ -34,6 +47,7 @@ class Attribution(BaseModel):
     t_s: float
     segment_ids: List[int] = Field(default_factory=list)
     frame_paths: List[Path] = Field(default_factory=list)
+    event_ids: List[str] = Field(default_factory=list)  # kind "shown": the screen events that are this step
 
 
 class InferredClause(BaseModel):
@@ -59,6 +73,18 @@ class ObservedChange(BaseModel):
     quotes: List[str] = Field(default_factory=list)
 
 
+class SlotFill(BaseModel):
+    """The answer to one of a data step's four questions (core/slots.py), with where the answer came from.
+    `by` says which source supplied it; a said slot carries the verbatim transcript quote, a shown slot the
+    screen events, a document slot verified cell citations."""
+
+    value: str
+    by: SlotBy
+    quote: str = ""
+    event_ids: List[str] = Field(default_factory=list)
+    citations: List[DataCitation] = Field(default_factory=list)
+
+
 class SOPStep(BaseModel):
     step_id: str
     order: int
@@ -68,6 +94,8 @@ class SOPStep(BaseModel):
     inferred_clauses: List[InferredClause] = Field(default_factory=list)
     flag_ids: List[str] = Field(default_factory=list)
     observed_changes: List[ObservedChange] = Field(default_factory=list)
+    kind: Optional[StepKind] = None  # set by the Reviewer; decides which slots apply (core/slots.py)
+    slots: Dict[str, SlotFill] = Field(default_factory=dict)  # slot name -> answer; an applicable slot not here is open
 
 
 class AppendixSegment(BaseModel):
@@ -122,6 +150,9 @@ class Flag(BaseModel):
     event_ids: List[str] = Field(default_factory=list)  # screen events attached as Checker evidence
     checker_tier: Optional[CheckerTier] = None  # which evidence path produced the verdict
     expansion_level: Optional[int] = None  # 0 or 1: the Checker level that reached the final verdict
+    finding_kind: Optional[FindingKind] = None  # set where the creating stage knows why the flag exists (reconcile)
+    slot: Optional[SlotName] = None  # which of a data step's four questions this flag asks, when it asks one
+    rungs: List[RungAttempt] = Field(default_factory=list)  # what the video and the document each did with this question
 
 
 class FrameDescription(BaseModel):
@@ -144,6 +175,10 @@ class Resolution(BaseModel):
     reason: str = ""
     narration_version: Optional[str] = None
     screen_version: Optional[str] = None
+    # A deterministic fill (anchors, Reconciler slot fills, the document rung) resolves a flag with no frame
+    # to show: it cites screen events or verified cells instead.
+    event_ids: List[str] = Field(default_factory=list)
+    citations: List[DataCitation] = Field(default_factory=list)
 
 
 def provenance_violations(doc: "SOPDocument") -> List[str]:
@@ -173,6 +208,9 @@ def provenance_violations(doc: "SOPDocument") -> List[str]:
     for step in doc.steps:
         if not step.attributions:
             violations.append(f"step {step.step_id!r} has no attributions")
+        for attr in step.attributions:
+            if attr.kind == "shown" and not attr.event_ids:
+                violations.append(f"step {step.step_id!r} has a shown attribution with no screen events")
         for fid in step.flag_ids:
             if fid not in flag_ids:
                 violations.append(f"step {step.step_id!r} references unknown flag {fid!r}")
@@ -203,7 +241,7 @@ def provenance_violations(doc: "SOPDocument") -> List[str]:
     for res in doc.resolutions:
         if res.flag_id not in flag_ids:
             violations.append(f"resolution references unknown flag {res.flag_id!r}")
-        if res.verdict in ("resolved", "contradicted") and not res.evidence:
+        if res.verdict in ("resolved", "contradicted") and not (res.evidence or res.event_ids or res.citations):
             violations.append(
                 f"resolution for {res.flag_id!r} has verdict {res.verdict!r} but no evidence"
             )
@@ -215,7 +253,22 @@ def provenance_violations(doc: "SOPDocument") -> List[str]:
 
 # Version of the sop.json / build_spec.json output contract. Bump the major number when a field
 # is removed or changes meaning; adding optional fields does not require a bump.
-SCHEMA_VERSION = "3.0"
+SCHEMA_VERSION = "3.1"
+
+
+class ScreenCoverage(BaseModel):
+    """How much of what the screen path wanted to look at was actually examined (screen runs only)."""
+
+    total: int = 0
+    examined: int = 0
+    skipped_budget: int = 0
+    skipped_cap: int = 0
+    unexamined: int = 0
+    not_examined_spans: List[tuple[float, float]] = Field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        return self.examined == self.total
 
 
 class SOPDocument(BaseModel):
@@ -228,6 +281,11 @@ class SOPDocument(BaseModel):
     appendix_segments: List[AppendixSegment] = Field(default_factory=list)
     review_failed: bool = False
     timing_degraded: bool = False
+    screen_coverage: Optional[ScreenCoverage] = None
+    # Screen-side additions (docs/26 flow plan): both default empty so older sop.json files load.
+    anchors: List[SelectionAnchor] = Field(default_factory=list)  # selections kept as pointers for speech and later values
+    screen_activity_unused: List[UnusedEvent] = Field(default_factory=list)  # events that became no step, with the reason
+    workbook_match: Optional[WorkbookMatch] = None  # whether the workbook supplied agrees with the recording (with --workbook)
 
     @computed_field  # type: ignore[misc]
     @property
@@ -292,10 +350,27 @@ class ReviewerOutputTransition(BaseModel):
     condition: Optional[str] = None
 
 
+class SlotClaim(BaseModel):
+    """What the speaker said about one slot of a step, with the verbatim words it rests on."""
+
+    value: str = ""
+    quote: str = ""
+
+
+class ReviewerOutputStep(BaseModel):
+    step_id: str
+    kind: Optional[StepKind] = None
+    source: Optional[SlotClaim] = None
+    key: Optional[SlotClaim] = None
+    target: Optional[SlotClaim] = None
+    effect: Optional[SlotClaim] = None
+
+
 class ReviewerOutputFlag(BaseModel):
     family: Family
     question: str = ""
     severity: Severity = "caution"
+    slot: Optional[SlotName] = None  # set when the question is about one of the step's four slots
     step_id: Optional[str] = None
     between_step_ids: Optional[List[str]] = None
     window_segment_ids: List[int] = Field(default_factory=list)
@@ -308,6 +383,7 @@ class ReviewerOutput(BaseModel):
 
     transitions: List[ReviewerOutputTransition] = Field(default_factory=list)
     flags: List[ReviewerOutputFlag] = Field(default_factory=list)
+    steps: List[ReviewerOutputStep] = Field(default_factory=list)
 
 
 class CheckerOutput(BaseModel):

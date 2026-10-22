@@ -2,6 +2,8 @@
 word attachment). A fake client and synthetic records: no video, no OCR engine, no API."""
 from __future__ import annotations
 
+import ast
+
 import pytest
 
 from core import config
@@ -153,10 +155,11 @@ def test_unknown_step_ids_are_ignored():
 
 
 def test_input_carries_word_times_and_falls_back_to_segment_times():
-    text = build_reconciler_input(_doc(), RECORDS, RAW)
-    assert "go@0.5" in text and "sheet@2.0" in text  # word-timed where words exist
-    assert "[6.0-12.0s] paste it here" in text  # segment-timed where they do not
-    assert "'event_id': 'ev-002'" in text
+    payload = ast.literal_eval(build_reconciler_input(_doc(), RECORDS, RAW))
+    spoken = {s["step_id"]: s["spoken"] for s in payload["steps"]}
+    assert "go@0.5" in spoken["step-01"] and "sheet@2.0" in spoken["step-01"]  # word-timed where words exist
+    assert spoken["step-02"] == "[6.0-12.0s] paste it here"  # segment-timed where they do not
+    assert [e["event_id"] for e in payload["events"]] == ["ev-001", "ev-002", "ev-003"]
 
 
 def test_observed_change_is_rendered_under_its_step():

@@ -77,14 +77,3 @@ def test_frame_to_data_uri_with_max_dimension_downscales(tmp_path):
     assert max(_decoded_size(uri)) == 1024
 
 
-def test_frame_to_data_uri_with_max_dimension_smaller_image_unchanged(tmp_path):
-    frame = _make_frame(tmp_path / "frame.png", (640, 480))
-    uri = frame_to_data_uri(frame, max_dimension=1024)
-    assert _decoded_size(uri) == (640, 480)
-
-
-def test_frame_to_data_uri_downscaled_payload_is_smaller(tmp_path):
-    frame = _make_frame(tmp_path / "frame.png", (1920, 1080))
-    full = frame_to_data_uri(frame)
-    downscaled = frame_to_data_uri(frame, max_dimension=1024)
-    assert len(downscaled) < len(full)

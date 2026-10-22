@@ -1,26 +1,130 @@
 {
-  "source": "docs/12-real-scenario-target.md, section 2 (the six things the narration never says) and section 4 (definition of done)",
-  "note": "Each finding passes if ANY group passes; a group passes if EVERY pattern matches within one line of sop.md (case-insensitive). The patterns are scenario facts, so they live here and never in prompts or pipeline code. A pattern hit is evidence that a finding was surfaced, not proof it was surfaced correctly: read the matching lines. 'forbidden' lists claims already seen to be false in real runs.",
+  "source": "docs/12-real-scenario-target.md, corrected and extended by the owner on 2026-10-22 (the row key is Transaction String; the identifying cell is clicked on Monthly Actuals; the match is in column B of the transactions sheet and the amount is taken from its column C; the work repeats per transaction; Variance is a formula). G10 (the total requires Status = 'Paid', which nothing in the recording sets) was added after the owner confirmed on 2026-10-22 that setting Status is not in the video.",
+  "note": "Each finding passes if ANY group passes (a line matching a finding's optional 'exclude' patterns never counts for it); a group passes if EVERY pattern matches within one line of sop.md (case-insensitive). The patterns are scenario facts, so they live here and never in prompts or pipeline code. A pattern hit is evidence that a finding was surfaced, not proof it was surfaced correctly: read the matching lines. 'forbidden' lists claims already seen to be false in real runs.",
   "findings": [
-    {"id": "G1", "name": "'master files' is the Master Bills sheet", "groups": [[ "master\\s*bills" ]]},
-    {"id": "G2", "name": "'monthly actions' is the Monthly Actuals sheet", "groups": [[ "monthly\\s*actuals" ]]},
-    {"id": "G3", "name": "'transactions' is the Transactions - March sheet", "groups": [[ "transactions[\\s-]*march" ]]},
-    {"id": "G4", "name": "rows are matched by Bill ID, not vendor name", "groups": [
-      [ "bill[\\s-]*id", "match|join|key|link|correspond|same row|find the (right )?row|which row|how .{0,30}row" ]
-    ]},
-    {"id": "G5", "name": "the paste target is column F (Actual)", "groups": [
-      [ "\\bF\\d{1,3}\\b" ],
-      [ "column\\s*F\\b" ],
-      [ "actual\\s*\\(F\\)" ]
-    ]},
-    {"id": "G6", "name": "Status must be 'Paid' for the total to include the row (ideally flagged as unverified)", "groups": [
-      [ "\\bpaid\\b" ],
-      [ "\\bstatus\\b", "total" ]
-    ]}
+    {
+      "id": "G1",
+      "name": "'master files' is the Master Bills sheet, the reference list, not where the work happens",
+      "groups": [
+        [
+          "master\\s*bills"
+        ]
+      ]
+    },
+    {
+      "id": "G2",
+      "name": "'monthly actions' is the Monthly Actuals sheet, where the work happens",
+      "groups": [
+        [
+          "monthly\\s*actuals"
+        ]
+      ]
+    },
+    {
+      "id": "G3",
+      "name": "'transactions' is the Transactions - March sheet, the third sheet compared against",
+      "groups": [
+        [
+          "transactions[\\s-]*march"
+        ]
+      ]
+    },
+    {
+      "id": "G4",
+      "name": "the row is identified by its Transaction String (the cell clicked on Monthly Actuals), not by Bill ID, which repeats",
+      "groups": [
+        [
+          "transaction\\s*string",
+          "identif|unique|key|match|compar|which row|how .{0,30}row|find the (right )?row"
+        ]
+      ]
+    },
+    {
+      "id": "G5",
+      "name": "that string is searched for in column B of the transactions sheet",
+      "groups": [
+        [
+          "column\\s*B\\b|\\bB\\d{1,3}\\b",
+          "transaction\\s*string|search|match|find|compar|look"
+        ]
+      ]
+    },
+    {
+      "id": "G6",
+      "name": "the value taken is the Actualized Amount in column C of the matching row",
+      "groups": [
+        [
+          "column\\s*C\\b|\\bC\\d{1,3}\\b",
+          "actualized|amount|copy|copied|take|taken"
+        ],
+        [
+          "actualized\\s*amount"
+        ]
+      ]
+    },
+    {
+      "id": "G7",
+      "name": "the paste target is column F (Actual) of the same row",
+      "groups": [
+        [
+          "paste|pasted|enter|type|put|into|goes? in|target|destination",
+          "column\\s*F\\b|\\bF\\d{1,3}\\b"
+        ],
+        [
+          "column\\s*F\\b",
+          "actual"
+        ],
+        [
+          "actual\\s*\\(F\\)"
+        ]
+      ]
+    },
+    {
+      "id": "G8",
+      "name": "the process repeats for every other transaction in the period; only one is shown",
+      "groups": [
+        [
+          "repeat|each|every|all (the )?(other )?(transactions|rows|bills)|remaining|rest of the|loop|one (transaction|row|bill)"
+        ]
+      ]
+    },
+    {
+      "id": "G9",
+      "name": "Variance is a formula that calculates the difference and must not be overwritten",
+      "groups": [
+        [
+          "variance",
+          "formula|calculat|difference|overwrit|do not|don't|live"
+        ]
+      ]
+    },
+    {
+      "id": "G10",
+      "name": "the total counts a row only where Status is 'Paid', and nothing in the recording sets it",
+      "exclude": [
+        "status bar",
+        "sum in "
+      ],
+      "groups": [
+        [
+          "\\bpaid\\b",
+          "status|column\\s*H\\b|H18"
+        ]
+      ]
+    }
   ],
   "forbidden": [
-    {"pattern": "usage spike", "why": "invented in a real run: a misread of a February row's Expected and Actual values"},
-    {"pattern": "235,?000", "why": "invented in a real run: no event shows any total changing to this value"}
+    {
+      "pattern": "contributes to the total of 235,?000",
+      "why": "235,000 is the real billed total shown on screen, so the number is not invented (owner, 2026-10-22). The error is calling it the total the pasted actual value contributes to; the total that updates is the actualized one"
+    },
+    {
+      "pattern": "usage spike",
+      "why": "invented in a real run: a misread of a February row's Expected and Actual values"
+    }
   ],
-  "completeness_banners": [ "Nothing is missing", "No open questions" ]
+  "completeness_banners": [
+    "Nothing is missing",
+    "No open questions"
+  ]
 }

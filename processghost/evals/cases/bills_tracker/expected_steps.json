@@ -1,0 +1,162 @@
+{
+  "source": "DRAFT true process for the example recording, written from docs/12-real-scenario-target.md and corrected by the owner on 2026-10-22 (the row key, the role of Master Bills, Variance, and that the work repeats per bill). Steps with confirmed=true were confirmed by the owner; the rest are still my reading and must be corrected.",
+  "goal": "A process flow in which every real step of this task appears, and every point where a step is probably missing is marked as a gap. A step counts as present when a flow node or gap node names it; the patterns below are scenario facts and live only in evals.",
+  "how_to_score": "Each step passes if ANY group passes; a group passes if EVERY pattern matches within one line of the flow output (case-insensitive). A hit shows the step is mentioned, not that it is right: read the matching lines.",
+  "parameters": {
+    "period": "The month being actualized. It changes every month, so no step may hard-code it. This recording happens to be March; the pipeline will see March in the video, but a step in the true process says 'the period's rows', 'the period's transactions sheet', 'the period's total'.",
+    "record_key": "Transaction String. It is unique because it carries a specific name and a number. Bill ID is generated per bill for individual products, so it has duplicates (the same id recurs, e.g. across months, for different use cases). CONFIRMED by the owner 2026-10-22; this corrects docs/12, which named Bill ID."
+  },
+  "steps": [
+    {
+      "id": "S1",
+      "order": 1,
+      "name": "Start from the Master Bills sheet: it is the reference list, not where the work happens",
+      "said": "partly",
+      "shown": true,
+      "confirmed": true,
+      "note": "Owner: 'these are the master files', then clicking to go to the actual place we work. The criterion for which transaction to take is the record key (Transaction String), never named in the narration.",
+      "groups": [
+        [
+          "master\\s*bills"
+        ]
+      ]
+    },
+    {
+      "id": "S2",
+      "order": 2,
+      "name": "On Monthly Actuals, select the transaction's Transaction String cell: it identifies this row",
+      "said": true,
+      "shown": true,
+      "confirmed": true,
+      "note": "Owner: the click on that cell (C18 in the recording) is the value to compare against the third sheet. It also holds the row identifier. Never said.",
+      "groups": [
+        [
+          "monthly\\s*actuals"
+        ]
+      ]
+    },
+    {
+      "id": "S3",
+      "order": 3,
+      "name": "Go to the transactions sheet for the period (the third sheet) to compare against",
+      "said": true,
+      "shown": true,
+      "confirmed": true,
+      "groups": [
+        [
+          "transactions[\\s-]*march"
+        ],
+        [
+          "transactions"
+        ]
+      ]
+    },
+    {
+      "id": "S4",
+      "order": 4,
+      "name": "On the transactions sheet, search column B (Transaction String) for the string from Monthly Actuals to find the matching row",
+      "said": false,
+      "shown": "partly",
+      "confirmed": true,
+      "note": "Never said. Owner: matched against column B of the third sheet. Transaction String is the identifier, not Bill ID (it repeats, column A) and not the vendor name.",
+      "groups": [
+        [
+          "transaction\\s*string|column\\s*B\b",
+          "match|join|key|identif|unique|link|same row|find the (right )?row|which row|how .{0,30}row|search"
+        ]
+      ]
+    },
+    {
+      "id": "S5",
+      "order": 5,
+      "name": "Take the value in column C (Actualized Amount) of that matching row and copy it",
+      "said": true,
+      "shown": true,
+      "confirmed": true,
+      "groups": [
+        [
+          "copy|copied"
+        ]
+      ]
+    },
+    {
+      "id": "S6",
+      "order": 6,
+      "name": "Return to Monthly Actuals, select the Actual cell (column F, F18 in the recording) of the same row and paste the amount",
+      "said": "partly",
+      "shown": true,
+      "confirmed": true,
+      "note": "Owner: F18 in Monthly Actuals. Said only as 'paste it here', with no column named.",
+      "groups": [
+        [
+          "paste|pasted",
+          "column\\s*F\\b|actual\\s*\\(F\\)"
+        ]
+      ]
+    },
+    {
+      "id": "S7",
+      "order": 7,
+      "name": "Rule of the workbook, not a step in the recording: the period's total counts a row only when its Status is 'Paid'",
+      "said": false,
+      "shown": false,
+      "confirmed": true,
+      "note": "Owner 2026-10-22: setting Status to 'Paid' is NOT in the video. The workbook's total formula requires it, so the process as recorded is incomplete or the total depends on something done elsewhere. The pipeline should raise it as a question, not state it as a step.",
+      "groups": [
+        [
+          "\\bpaid\\b",
+          "status"
+        ]
+      ],
+      "type": "rule",
+      "in_video": false
+    },
+    {
+      "id": "S8",
+      "order": 8,
+      "name": "Check that the period's total row now includes the row",
+      "said": "claimed",
+      "shown": "partly",
+      "confirmed": false,
+      "note": "Spoken as 'the total will get updated automatically'. That only holds if S7 was done. The total is a per-period formula, so which row it sits on changes with the period.",
+      "groups": [
+        [
+          "total",
+          "updat|includ|sum"
+        ]
+      ]
+    },
+    {
+      "id": "S9",
+      "order": 9,
+      "name": "Constraint, not an action: the Variance column is a formula that calculates the difference; do not overwrite it",
+      "said": false,
+      "shown": false,
+      "confirmed": true,
+      "inferred": false,
+      "note": "Owner: Variance is a formula that calculates the difference (the workbook shows =IF(F<>\"\",F-E,\"\")). It is a fact about the sheet that the flow should state, not a step someone performs.",
+      "groups": [
+        [
+          "variance"
+        ]
+      ],
+      "type": "constraint"
+    },
+    {
+      "id": "S10",
+      "order": 10,
+      "name": "Repeat for every other transaction in the period",
+      "said": false,
+      "shown": false,
+      "confirmed": true,
+      "inferred": false,
+      "note": "Owner: not said, but implied. One bill is shown; the process is needed for multiple.",
+      "groups": [
+        [
+          "repeat|remaining|each (bill|row)|all (the )?(bills|rows)|loop"
+        ]
+      ],
+      "implied": true
+    }
+  ]
+}

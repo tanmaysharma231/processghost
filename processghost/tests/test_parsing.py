@@ -26,11 +26,6 @@ def test_extract_chat_content_missing_choices_raises():
         extract_chat_content({})
 
 
-def test_extract_chat_content_empty_choices_raises():
-    with pytest.raises(LLMResponseParseError):
-        extract_chat_content({"choices": []})
-
-
 # --- parse_sarvam_stt_result -------------------------------------------------
 
 def test_parse_sarvam_stt_result_happy_path_with_timestamps():

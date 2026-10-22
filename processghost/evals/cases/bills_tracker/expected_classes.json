@@ -1,0 +1,58 @@
+{
+  "video": "../../../../data/english_hackathon_test.mp4",
+  "note": "DRAFT event-class labels, one per label in expected_events.json (L1..L7, same times). Written from the event descriptions there and the keyframes seen during development, so they are NOT independent of the detector. A human must watch the video, correct them, and set confirmed=true. Classes: transient, view_only, selection, navigation, data_change, unclear. The hard rule scored here is that no data_change label is ever classified as a dropped class (transient, view_only).",
+  "events": [
+    {
+      "label_id": "L1",
+      "t_start": 2.8,
+      "t_end": 3.3,
+      "class": "selection",
+      "confirmed": true,
+      "note": "Owner: this is the speaker showing that these are the master files, then clicking to go to the place the work happens. A selection used as a pointer. The detector reads it as unclear (no readable cell change), a known miss."
+    },
+    {
+      "label_id": "L2",
+      "t_start": 4.2,
+      "t_end": 5.4,
+      "class": "navigation",
+      "confirmed": false
+    },
+    {
+      "label_id": "L3",
+      "t_start": 6.2,
+      "t_end": 6.6,
+      "class": "selection",
+      "confirmed": true,
+      "note": "Owner: the click on the Transaction String cell (C18) on Monthly Actuals, the value that is compared against the third sheet. A selection whose role is to supply the comparison value (how the row is identified)."
+    },
+    {
+      "label_id": "L4",
+      "t_start": 8.2,
+      "t_end": 8.6,
+      "class": "selection",
+      "confirmed": true,
+      "note": "Owner: the click on the Actual cell (F18) on Monthly Actuals, the paste target."
+    },
+    {
+      "label_id": "L5",
+      "t_start": 9.6,
+      "t_end": 10.2,
+      "class": "navigation",
+      "confirmed": false
+    },
+    {
+      "label_id": "L6",
+      "t_start": 15.9,
+      "t_end": 16.5,
+      "class": "navigation",
+      "confirmed": false
+    },
+    {
+      "label_id": "L7",
+      "t_start": 18.2,
+      "t_end": 18.5,
+      "class": "data_change",
+      "confirmed": false
+    }
+  ]
+}

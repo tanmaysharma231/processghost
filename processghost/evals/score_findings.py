@@ -34,8 +34,11 @@ def score_text(sop_md: str, spec: dict) -> Dict:
     results = []
     for f in spec["findings"]:
         hit_line = None
+        exclude = f.get("exclude", [])
         for group in f["groups"]:
             for line in lines:
+                if any(re.search(x, line, re.I) for x in exclude):
+                    continue  # a line that matches an exclude pattern never counts for this finding
                 if all(re.search(p, line, re.I) for p in group):
                     hit_line = line.strip()
                     break

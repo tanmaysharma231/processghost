@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List
 
 from core.io.storage import save_json
+from core.ladder import sme_questions
 from core.models.sop import SCHEMA_VERSION, Flag, SOPDocument
 
 PROCEED_WITH_ASSUMPTION = "proceed_with_assumption"
@@ -45,6 +46,25 @@ def triage_flag(flag: Flag) -> str:
     return PROCEED_WITH_FLAG
 
 
+def finding_kind(flag: Flag) -> str:
+    """How much the evidence supports saying, as a deterministic function of the flag -- no model call.
+    A kind the creating stage recorded wins (the Reconciler knows whether a flag is a claim not shown or
+    an unspecified rule). Otherwise it follows the outcome. A flag the pipeline could not check says
+    nothing about the process, and a claim the screen does not show is `unsupported_assertion`, never
+    'disproved': absence of a demonstration is not disproof."""
+    if flag.status in ("unchecked", "check_failed"):
+        return "no_finding"
+    if flag.status == "contradicted":
+        return "potential_conflict"
+    if flag.finding_kind is not None and flag.status != "resolved":
+        return flag.finding_kind
+    if flag.status == "resolved":
+        return "observed_unexplained" if flag.family == "structural" else "explained_action"
+    if flag.family == "structural" and flag.origin == "screen":
+        return "observed_unexplained"
+    return "unresolved_requirement"
+
+
 def build_spec(doc: SOPDocument) -> dict:
     """Pure function of `doc` -- same doc always produces the same build_spec, mirroring
     report/sop_render.py: render_sop_md's determinism guarantee."""
@@ -65,6 +85,9 @@ def build_spec(doc: SOPDocument) -> dict:
             "origin": flag.origin,
             "event_ids": flag.event_ids,
             "checker_tier": flag.checker_tier,
+            "finding_kind": finding_kind(flag),
+            "slot": flag.slot,
+            "rungs": [r.model_dump(mode="json") for r in flag.rungs],
             "triage": triage,
         }
         flags_out.append(entry)
@@ -79,6 +102,7 @@ def build_spec(doc: SOPDocument) -> dict:
         "steps": [s.model_dump() for s in sorted(doc.steps, key=lambda s: s.order)],
         "flags": flags_out,
         "escalation_queue": escalation_queue,
+        "sme_questions": sme_questions(doc),
         "provenance_complete": doc.provenance_complete,
         "review_failed": doc.review_failed,
         "timing_degraded": doc.timing_degraded,

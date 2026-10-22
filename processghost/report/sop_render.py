@@ -18,6 +18,9 @@ from typing import List, Optional
 
 from core.io.storage import save_json
 from core.models.sop import SOPDocument
+from core.ladder import sme_text
+from core.screen.anchors import describe as describe_anchor
+from core.slots import applicable_slots
 
 
 def fmt_ts(t: float) -> str:
@@ -36,7 +39,42 @@ def _render_attribution_tag(a) -> str:
     every attribution came from narration, now that a step can exist with no `[said]` at all."""
     if a.kind == "inferred":
         return f"`[inferred from screen @{fmt_ts(a.t_s)}]`"
+    if a.kind == "shown":
+        return f"`[shown @{fmt_ts(a.t_s)}, {', '.join(a.event_ids)}]`"
     return f"`[said @{fmt_ts(a.t_s)}]`"
+
+
+_SLOT_LABELS = {"source": "Source", "key": "How it is picked", "target": "Target", "effect": "What else reads it"}
+
+
+def _slot_source_tag(fill) -> str:
+    if fill.by == "said":
+        return f'`[said: "{fill.quote}"]`'
+    if fill.by == "shown":
+        return f"`[shown, {', '.join(fill.event_ids)}]`"
+    if fill.by == "document":
+        cells = ", ".join(f"{c.workbook}/{c.sheet}!{c.ref}" for c in fill.citations)
+        return f"`[from data: {cells}]`"
+    return f"`[{fill.by}]`"
+
+
+def _slot_lines(step, flags_by_slot: dict) -> List[str]:
+    """One line per applicable slot of a data step: its answer and where the answer came from, or that nothing
+    states it. A missing slot is shown as missing, never skipped, so a reader sees the gap where it is."""
+    out = []
+    for slot in applicable_slots(step.kind):
+        fill = step.slots.get(slot)
+        if fill is not None:
+            out.append(f"- {_SLOT_LABELS[slot]}: {fill.value} {_slot_source_tag(fill)}")
+        else:
+            flag = flags_by_slot.get(slot)
+            ref = f" (see {flag.flag_id})" if flag else ""
+            out.append(f"- {_SLOT_LABELS[slot]}: **not stated**{ref}")
+    return out
+
+
+def _is_shown_only(step) -> bool:
+    return bool(step.attributions) and all(a.kind == "shown" for a in step.attributions)
 
 
 _SEVERITY_ORDER = {"blocking": 0, "caution": 1, "note": 2}
@@ -107,6 +145,17 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
         )
         lines.append("")
 
+    match = doc.workbook_match
+    if match is not None and match.verdict != "match":
+        detail = " ".join(i.detail + "." for i in match.issues)
+        if match.verdict == "mismatch":
+            lines.append(f"> **THE WORKBOOK DOES NOT MATCH THE RECORDING** -- {detail} No answer in this document was drawn from it.")
+        elif match.verdict == "partial":
+            lines.append(f"> **THE WORKBOOK MAY DIFFER FROM THE RECORDING** -- {detail} Answers drawn from it are not verified against the recording.")
+        else:
+            lines.append("> The workbook was not compared with the recording (no screen data to compare), so its answers are not verified against it.")
+        lines.append("")
+
     if doc.review_failed:
         lines.append(
             "> **REVIEW FAILED** -- the review stage did not complete for this run. Zero flags "
@@ -132,6 +181,10 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
             flags_between.setdefault(flag.between_step_ids, []).append(flag)
 
     ordered_steps = sorted(doc.steps, key=lambda s: s.order)
+    flag_of_slot: dict = {}
+    for flag in doc.flags:
+        if flag.slot and flag.step_id:
+            flag_of_slot.setdefault(flag.step_id, {})[flag.slot] = flag
 
     # ---- Section 1: the workflow, as spoken -------------------------------------------------
     lines.append("## 1. The workflow, as spoken")
@@ -143,19 +196,24 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
         )
         if said_tags:
             lines.append(f"{step.instruction}  {said_tags}".rstrip())
+        elif _is_shown_only(step):
+            # Done on screen but never said: it came from a screen event, not from narration.
+            tags = " ".join(_render_attribution_tag(a) for a in step.attributions if a.kind == "shown")
+            lines.append(f"{step.instruction}  {tags}  _(done on screen, not said)_")
         else:
             # Nobody said this -- every attribution on this step is "inferred" (a Checker-
             # inserted structural step, see Section 2). Without an explicit marker this would
             # read identically to a narrated step, which is exactly the ambiguity this section
             # exists to avoid.
             lines.append(f"{step.instruction}  _(not narrated -- see Section 2)_")
-        for oc in step.observed_changes:
+        for oc in ([] if _is_shown_only(step) else step.observed_changes):
             lines.append(
                 f"- Observed on screen: {oc.text} `[observed @{fmt_ts(oc.t_s)}, {', '.join(oc.event_ids)}]`"
             )
+        lines.extend(_slot_lines(step, flag_of_slot.get(step.step_id, {})))
         lines.append("")
 
-    if doc.transitions or any(f.family == "structural" for f in doc.flags):
+    if doc.transitions or any(f.family == "structural" for f in doc.flags) or any(_is_shown_only(s) for s in ordered_steps):
         lines.append("### Process flow")
         lines.append("```mermaid")
         lines.append("flowchart TD")
@@ -164,8 +222,8 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
         covered = {(t.from_step_id, t.to_step_id) for t in doc.transitions}
         for idx in range(len(ordered_steps) - 1):
             a, b = ordered_steps[idx], ordered_steps[idx + 1]
-            a_inserted = a.attributions and all(attr.kind == "inferred" for attr in a.attributions)
-            b_inserted = b.attributions and all(attr.kind == "inferred" for attr in b.attributions)
+            a_inserted = a.attributions and all(attr.kind in ("inferred", "shown") for attr in a.attributions)
+            b_inserted = b.attributions and all(attr.kind in ("inferred", "shown") for attr in b.attributions)
             if a_inserted or b_inserted:
                 # This edge touches a Checker-inserted step. `covered`/`flags_between` are keyed
                 # on the Reviewer's original consecutive-pairs chain, which has no entry for a
@@ -176,7 +234,7 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
                 # here, so render it solid and name the flag that explains the insertion, rather
                 # than showing a second, redundant "gap" mark right where the gap was just closed.
                 inserted_step = a if a_inserted else b
-                label = inserted_step.flag_ids[0] if inserted_step.flag_ids else "resolved"
+                label = inserted_step.flag_ids[0] if inserted_step.flag_ids else ("shown" if _is_shown_only(inserted_step) else "resolved")
                 lines.append(f"    {a.step_id} -->|{label}| {b.step_id}")
             elif (a.step_id, b.step_id) in covered:
                 lines.append(f"    {a.step_id} --> {b.step_id}")
@@ -252,8 +310,43 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
             lines.append(f"- **{flag.flag_id}** ({flag.question}) -- {_NOT_CHECKED_LABELS[flag.status]}")
         lines.append("")
 
+    coverage = doc.screen_coverage
+    if coverage is not None and coverage.total:
+        lines.append("### Screen coverage")
+        lines.append("")
+        lines.append(f"- Examined {coverage.examined} of {coverage.total} screen investigation(s).")
+        skipped = coverage.skipped_budget + coverage.skipped_cap
+        if skipped:
+            lines.append(f"- {skipped} skipped because of the flag cap or spend budget (a pipeline limitation, not a finding).")
+        if coverage.unexamined:
+            lines.append(f"- {coverage.unexamined} not reached by any check.")
+        for start, end in coverage.not_examined_spans:
+            lines.append(f"  - not examined: `@{fmt_ts(start)}` to `@{fmt_ts(end)}`")
+        lines.append("")
+
+    linked = [a for a in doc.anchors if a.role is not None]
+    if linked:
+        lines.append("### Selections tied to speech or to a later value")
+        lines.append("")
+        for a in linked:
+            lines.append(f"- `@{fmt_ts(a.t_s)}` {describe_anchor(a)} `[{', '.join(a.signals) or 'no signal'}; {a.event_id}]`")
+        lines.append("")
+
+    if doc.screen_activity_unused:
+        lines.append("### Screen activity that became no step")
+        lines.append("")
+        for u in doc.screen_activity_unused:
+            lines.append(f"- `@{fmt_ts(u.t_s)}` {u.event_class} -- {u.reason} `[{u.event_id}]`")
+        lines.append("")
+
     if not (contradicted or unresolvable or not_checked):
-        lines.append("_Nothing is missing -- every open question was resolved from the video._")
+        if coverage is not None and not coverage.complete:
+            lines.append(
+                "_No open question was left unresolved among the items that were checked, but part of the "
+                "screen was not examined (see Screen coverage above). That is not evidence nothing is missing._"
+            )
+        else:
+            lines.append("_Nothing is missing -- every open question was resolved from the video._")
         lines.append("")
 
     # ---- Section 4: questions to ask -----------------------------------------------------------
@@ -274,7 +367,7 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
                 where += f" @{fmt_ts(flag.window_time_range[0])}"
             elif flag.window_segment_ids:
                 where += f" @segment {min(flag.window_segment_ids)}"
-            lines.append(f"{i}. [{flag.severity}] {flag.question}{where} `[{flag.flag_id}]`")
+            lines.append(f"{i}. [{flag.severity}] {sme_text(flag)[0]}{where} `[{flag.flag_id}]`")
     elif any(f.status in _INFRASTRUCTURE_FAILURE_STATUSES for f in doc.flags):
         lines.append(
             "_No open questions right now -- everything else the reviewer flagged was resolved. "

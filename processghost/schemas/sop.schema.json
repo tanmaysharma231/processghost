@@ -35,7 +35,8 @@
         "kind": {
           "enum": [
             "said",
-            "inferred"
+            "inferred",
+            "shown"
           ],
           "title": "Kind",
           "type": "string"
@@ -58,6 +59,13 @@
           },
           "title": "Frame Paths",
           "type": "array"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
         }
       },
       "required": [
@@ -65,6 +73,54 @@
         "t_s"
       ],
       "title": "Attribution",
+      "type": "object"
+    },
+    "DataCitation": {
+      "description": "One cell a data claim rests on. A citation counts only if it matches a cell a read-only tool actually\nreturned for that question (core/data/checker.py); a model cannot cite a cell it was never shown.",
+      "properties": {
+        "workbook": {
+          "title": "Workbook",
+          "type": "string"
+        },
+        "sheet": {
+          "title": "Sheet",
+          "type": "string"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "formula": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Formula"
+        }
+      },
+      "required": [
+        "workbook",
+        "sheet",
+        "ref"
+      ],
+      "title": "DataCitation",
       "type": "object"
     },
     "Flag": {
@@ -177,7 +233,8 @@
             "reviewer",
             "coverage",
             "screen",
-            "reconcile"
+            "reconcile",
+            "data"
           ],
           "title": "Origin",
           "type": "string"
@@ -217,6 +274,51 @@
           ],
           "default": null,
           "title": "Expansion Level"
+        },
+        "finding_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "explained_action",
+                "observed_unexplained",
+                "unresolved_requirement",
+                "potential_conflict",
+                "unsupported_assertion",
+                "no_finding"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finding Kind"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "enum": [
+                "source",
+                "key",
+                "target",
+                "effect"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        },
+        "rungs": {
+          "items": {
+            "$ref": "#/$defs/RungAttempt"
+          },
+          "title": "Rungs",
+          "type": "array"
         }
       },
       "required": [
@@ -300,6 +402,34 @@
         "flag_id"
       ],
       "title": "InferredClause",
+      "type": "object"
+    },
+    "MatchIssue": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "sheet_count",
+            "cell_content",
+            "text_missing"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "fatal": {
+          "default": false,
+          "title": "Fatal",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "title": "MatchIssue",
       "type": "object"
     },
     "ObservedChange": {
@@ -398,6 +528,20 @@
           ],
           "default": null,
           "title": "Screen Version"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/DataCitation"
+          },
+          "title": "Citations",
+          "type": "array"
         }
       },
       "required": [
@@ -405,6 +549,67 @@
         "verdict"
       ],
       "title": "Resolution",
+      "type": "object"
+    },
+    "RungAttempt": {
+      "description": "What one source of evidence did with one question. The ladder is video, then document, then the person who\nrecorded it; this records the first two so a question that reaches that person carries what was already tried.",
+      "properties": {
+        "rung": {
+          "enum": [
+            "video",
+            "document"
+          ],
+          "title": "Rung",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "answered",
+            "contradicted",
+            "candidates",
+            "no_answer",
+            "skipped"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "answer": {
+          "default": "",
+          "title": "Answer",
+          "type": "string"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/DataCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        },
+        "candidates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rung",
+        "outcome"
+      ],
+      "title": "RungAttempt",
       "type": "object"
     },
     "SOPStep": {
@@ -452,6 +657,32 @@
           },
           "title": "Observed Changes",
           "type": "array"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "navigate",
+                "move_data",
+                "edit",
+                "check",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "slots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SlotFill"
+          },
+          "title": "Slots",
+          "type": "object"
         }
       },
       "required": [
@@ -461,6 +692,169 @@
         "instruction"
       ],
       "title": "SOPStep",
+      "type": "object"
+    },
+    "ScreenCoverage": {
+      "description": "How much of what the screen path wanted to look at was actually examined (screen runs only).",
+      "properties": {
+        "total": {
+          "default": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "examined": {
+          "default": 0,
+          "title": "Examined",
+          "type": "integer"
+        },
+        "skipped_budget": {
+          "default": 0,
+          "title": "Skipped Budget",
+          "type": "integer"
+        },
+        "skipped_cap": {
+          "default": 0,
+          "title": "Skipped Cap",
+          "type": "integer"
+        },
+        "unexamined": {
+          "default": 0,
+          "title": "Unexamined",
+          "type": "integer"
+        },
+        "not_examined_spans": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Not Examined Spans",
+          "type": "array"
+        }
+      },
+      "title": "ScreenCoverage",
+      "type": "object"
+    },
+    "SelectionAnchor": {
+      "description": "A cell/item selection kept as a pointer for what is said or done near it, not as a step of its own.\n`confirmed` needs two independent signals (time plus a pointer word, or time plus a value that shows up\nin a later data change); one signal leaves it a candidate (\"possibly <focus>\"), never a statement.",
+      "properties": {
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "t_s": {
+          "title": "T S",
+          "type": "number"
+        },
+        "focus": {
+          "default": "",
+          "title": "Focus",
+          "type": "string"
+        },
+        "content": {
+          "default": "",
+          "title": "Content",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "pointer",
+                "source",
+                "check"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "signals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Signals",
+          "type": "array"
+        },
+        "confirmed": {
+          "default": false,
+          "title": "Confirmed",
+          "type": "boolean"
+        },
+        "target_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Event Id"
+        }
+      },
+      "required": [
+        "event_id",
+        "t_s"
+      ],
+      "title": "SelectionAnchor",
+      "type": "object"
+    },
+    "SlotFill": {
+      "description": "The answer to one of a data step's four questions (core/slots.py), with where the answer came from.\n`by` says which source supplied it; a said slot carries the verbatim transcript quote, a shown slot the\nscreen events, a document slot verified cell citations.",
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "by": {
+          "enum": [
+            "said",
+            "shown",
+            "document",
+            "sme"
+          ],
+          "title": "By",
+          "type": "string"
+        },
+        "quote": {
+          "default": "",
+          "title": "Quote",
+          "type": "string"
+        },
+        "event_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Event Ids",
+          "type": "array"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/DataCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "value",
+        "by"
+      ],
+      "title": "SlotFill",
       "type": "object"
     },
     "StepTransition": {
@@ -505,11 +899,92 @@
       ],
       "title": "StepTransition",
       "type": "object"
+    },
+    "UnusedEvent": {
+      "description": "A screen event that was classified as carrying no process value and so became no step. Listed in the\nreport with its reason, never silently dropped.",
+      "properties": {
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "t_s": {
+          "title": "T S",
+          "type": "number"
+        },
+        "event_class": {
+          "enum": [
+            "transient",
+            "view_only",
+            "selection",
+            "navigation",
+            "data_change",
+            "unclear"
+          ],
+          "title": "Event Class",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_id",
+        "t_s",
+        "event_class"
+      ],
+      "title": "UnusedEvent",
+      "type": "object"
+    },
+    "WorkbookMatch": {
+      "description": "Whether the workbook supplied agrees with what the recording showed (core/data/match.py).",
+      "properties": {
+        "verdict": {
+          "enum": [
+            "match",
+            "partial",
+            "mismatch",
+            "unknown"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "checked": {
+          "default": 0,
+          "title": "Checked",
+          "type": "integer"
+        },
+        "label_recall": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label Recall"
+        },
+        "issues": {
+          "items": {
+            "$ref": "#/$defs/MatchIssue"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "required": [
+        "verdict"
+      ],
+      "title": "WorkbookMatch",
+      "type": "object"
     }
   },
   "properties": {
     "schema_version": {
-      "default": "3.0",
+      "default": "3.1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -561,6 +1036,42 @@
       "default": false,
       "title": "Timing Degraded",
       "type": "boolean"
+    },
+    "screen_coverage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScreenCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "anchors": {
+      "items": {
+        "$ref": "#/$defs/SelectionAnchor"
+      },
+      "title": "Anchors",
+      "type": "array"
+    },
+    "screen_activity_unused": {
+      "items": {
+        "$ref": "#/$defs/UnusedEvent"
+      },
+      "title": "Screen Activity Unused",
+      "type": "array"
+    },
+    "workbook_match": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkbookMatch"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

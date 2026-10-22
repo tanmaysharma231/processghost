@@ -58,13 +58,15 @@ def test_text_source_splits_into_one_passage_per_paragraph(tmp_path):
     assert doc.passages[1].locator == "lines 4-4"
 
 
-def test_every_passage_is_groundable_against_its_own_text(tmp_path):
-    path = _write_text(tmp_path, "First fact stated here.\n\nSecond fact, stated differently.\n")
+def test_every_passage_is_groundable_in_the_source_file(tmp_path):
+    content = "First fact stated here.\n\nSecond fact, stated differently.\n"
+    path = _write_text(tmp_path, content)
 
     doc = load_source(path, source_id="SRC-01")
 
+    assert doc.passages
     for passage in doc.passages:
-        assert quote_is_grounded(passage.text, passage.text)
+        assert quote_is_grounded(passage.text, content)  # a passage is a quote of the file, not a paraphrase
 
 
 def test_unsupported_suffix_raises_rather_than_producing_an_empty_source(tmp_path):
@@ -135,13 +137,15 @@ def test_spreadsheet_passage_count_stays_small_not_one_per_cell(tmp_path):
     assert len(doc.passages) < 10
 
 
-def test_every_spreadsheet_passage_is_groundable_against_its_own_text(tmp_path):
+def test_every_spreadsheet_passage_points_at_a_real_sheet(tmp_path):
     path = _write_workbook(tmp_path)
 
     doc = load_source(path, source_id="SRC-01")
 
+    sheets = set(openpyxl.load_workbook(path).sheetnames)
+    assert doc.passages
     for passage in doc.passages:
-        assert quote_is_grounded(passage.text, passage.text)
+        assert passage.locator.split("!", 1)[0] in sheets
 
 
 def test_row_cap_truncation_is_recorded_not_silent(tmp_path, monkeypatch):

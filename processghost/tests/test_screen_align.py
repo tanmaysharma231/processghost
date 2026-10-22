@@ -97,3 +97,14 @@ def test_event_before_the_first_step_gets_a_single_step_anchor():
     res = align_events(doc, [_ev(1, 1.0)], TRANSCRIPT)  # 11 s before the only step
     silent = [f for f in res.doc.flags if f.origin == "screen"]
     assert len(silent) == 1 and silent[0].between_step_ids is None and silent[0].step_id == "step-01"
+
+
+def test_without_silent_flags_events_attach_to_existing_flags_but_create_none():
+    """silent_flags=False is the mode used when the Reconciler owns silent-step detection."""
+    gap_event = _ev(1, 8.0, "scene_cut")  # in a gap no step covers: normally a silent-step flag
+    asked = Flag(flag_id="FLAG-01", family="structural", question="What happens between them?", severity="blocking",
+                 window_time_range=(6.0, 12.0), between_step_ids=("step-01", "step-02"))
+    res = align_events(_doc([asked]), [gap_event], TRANSCRIPT, silent_flags=False)
+    assert [f.flag_id for f in res.doc.flags] == ["FLAG-01"]  # no new flag
+    assert res.doc.flags[0].event_ids == ["ev-001"]  # but the event is attached as evidence to the flag that asked
+    assert align_events(_doc(), [gap_event], TRANSCRIPT, silent_flags=True).doc.flags  # the default mode would have created one

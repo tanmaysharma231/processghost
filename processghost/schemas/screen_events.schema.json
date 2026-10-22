@@ -115,6 +115,58 @@
           ],
           "default": null,
           "title": "Scene Label"
+        },
+        "transient": {
+          "default": false,
+          "title": "Transient",
+          "type": "boolean"
+        },
+        "peak_frame": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Frame"
+        },
+        "residual_bboxes": {
+          "items": {
+            "maxItems": 4,
+            "minItems": 4,
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Residual Bboxes",
+          "type": "array"
+        },
+        "context_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Id"
         }
       },
       "required": [
@@ -135,6 +187,18 @@
     "video": {
       "title": "Video",
       "type": "string"
+    },
+    "video_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Video Sha"
     },
     "duration_s": {
       "title": "Duration S",

@@ -101,3 +101,8 @@ def test_max_frames_caps_result(tmp_path):
         FIXTURE_VIDEO, tmp_path, start_s=0.0, end_s=10.0, interval_s=0.5, max_frames=4
     )
     assert len(frames) <= 4
+
+
+def test_an_empty_or_reversed_window_extracts_nothing(tmp_path):
+    assert extract_frames_window(tmp_path / "missing.mp4", tmp_path / "out", 5.0, 5.0) == []
+    assert extract_frames_window(tmp_path / "missing.mp4", tmp_path / "out", 8.0, 2.0) == []

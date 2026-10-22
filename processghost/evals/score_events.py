@@ -22,9 +22,9 @@ def _overlaps(a0: float, a1: float, b0: float, b1: float, tol: float) -> bool:
     return a0 - tol <= b1 and b0 - tol <= a1
 
 
-def score_events(detected: List[dict], labels: List[dict], tol: float = 0.5) -> Dict:
-    """`detected` items need t_start/t_end/type/event_id; `labels` items need t_start/t_end/label_id
-    and optionally type. Returns a dict of metrics plus matched/missed/false lists."""
+def match_by_time(detected: List[dict], labels: List[dict], tol: float = 0.5) -> Tuple[List[Tuple[dict, dict]], set, set]:
+    """One-to-one matching of detected items to labels by time overlap, closest start first. Returns the
+    matched (detected, label) pairs and the used index sets of each side. Shared by every event scorer."""
     candidates: List[Tuple[float, int, int]] = []
     for i, d in enumerate(detected):
         for j, lab in enumerate(labels):
@@ -40,6 +40,13 @@ def score_events(detected: List[dict], labels: List[dict], tol: float = 0.5) -> 
         used_d.add(i)
         used_l.add(j)
         matches.append((detected[i], labels[j]))
+    return matches, used_d, used_l
+
+
+def score_events(detected: List[dict], labels: List[dict], tol: float = 0.5) -> Dict:
+    """`detected` items need t_start/t_end/type/event_id; `labels` items need t_start/t_end/label_id
+    and optionally type. Returns a dict of metrics plus matched/missed/false lists."""
+    matches, used_d, used_l = match_by_time(detected, labels, tol)
 
     typed = [(d, lab) for d, lab in matches if lab.get("type")]
     return {

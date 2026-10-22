@@ -28,6 +28,7 @@ from core import config
 from core.io.video import frame_name_for
 from core.models.screen import Box, Scene, ScreenEvent, ScreenTimeline
 from core.screen.diff import diff_boxes, normalize_frame
+from core.screen.evidence_id import video_fingerprint
 from core.screen.ocr import OcrFn, get_ocr
 
 _Sample = Tuple[float, np.ndarray]  # (t_s, BGR frame)
@@ -64,19 +65,51 @@ def _bbox_coverage(boxes: Sequence[Box], width: int, height: int) -> float:
     return ((x1 - x0) * (y1 - y0)) / float(width * height)
 
 
-def _is_scroll(before: np.ndarray, after: np.ndarray, changed_frac: float) -> bool:
-    """True if `after` is `before` shifted vertically: phase-correlate the two, translate `before`
-    by the measured shift, and require the residual difference to be much smaller than the raw one."""
+def _scroll_shift(before: np.ndarray, after: np.ndarray, changed_frac: float) -> Optional[float]:
+    """Vertical shift of the content, in ORIGINAL pixels (positive = moved down), if `after` is `before`
+    scrolled; else None. Phase-correlate the two, translate `before` by the measured shift, and require
+    the residual difference to be much smaller than the raw one."""
     if changed_frac < 0.02:
-        return False
-    a, _ = normalize_frame(before)
+        return None
+    a, scale = normalize_frame(before)
     b, _ = normalize_frame(after)
     (dx, dy), response = cv2.phaseCorrelate(np.float32(a), np.float32(b))
     if abs(dy) < config.SCREEN_SCROLL_MIN_SHIFT_PX or response < config.SCREEN_SCROLL_MIN_RESPONSE:
-        return False
+        return None
     shifted = cv2.warpAffine(a, np.float32([[1, 0, dx], [0, 1, dy]]), (a.shape[1], a.shape[0]))
     residual = float(np.count_nonzero(cv2.absdiff(shifted, b) > config.SCREEN_PIXEL_THRESH)) / a.size
-    return residual < 0.5 * changed_frac
+    return dy / scale if residual < 0.5 * changed_frac else None
+
+
+def _is_scroll(before: np.ndarray, after: np.ndarray, changed_frac: float) -> bool:
+    return _scroll_shift(before, after, changed_frac) is not None
+
+
+def _residual_boxes(before: np.ndarray, after: np.ndarray, dy_px: float) -> List[Box]:
+    """Changes that remain after undoing a vertical scroll, in `after` coordinates. Compares only the
+    rows both frames show (newly revealed rows are new content, not an edit). An edit made during or
+    right after a scroll would otherwise be hidden inside the 'large_shift' label."""
+    h = before.shape[0]
+    dy = int(round(dy_px))
+    if abs(dy) >= h:
+        return []
+    if dy >= 0:
+        b, a, offset = before[: h - dy], after[dy:], dy
+    else:
+        b, a, offset = before[-dy:], after[: h + dy], 0
+    return [(x, y + offset, w, hh) for x, y, w, hh in diff_boxes(b, a).boxes]
+
+
+def _touches(boxes: Sequence[Box], earlier: Sequence[Box], margin: int) -> bool:
+    """True if any of `boxes` lies within `margin` pixels of any of `earlier`. Empty input carries no
+    locus information, so it counts as touching (never a reason to split)."""
+    if not boxes or not earlier:
+        return True
+    for x, y, w, h in boxes:
+        for ex, ey, ew, eh in earlier:
+            if x < ex + ew + margin and ex < x + w + margin and y < ey + eh + margin and ey < y + h + margin:
+                return True
+    return False
 
 
 def chrome_text(frame: np.ndarray, ocr: OcrFn) -> str:
@@ -104,6 +137,7 @@ def build_screen_timeline(
     samples, duration_s, width, height = _read_samples(video_path, fps)
     timeline = ScreenTimeline(
         video=str(video_path),
+        video_sha=video_fingerprint(video_path),
         duration_s=duration_s,
         width=width,
         height=height,
@@ -120,15 +154,20 @@ def build_screen_timeline(
 
     # Pass 1: per-sample activity (did this sample differ from the previous one?).
     active: List[bool] = [False]
+    fracs: List[float] = [0.0]
+    sample_boxes: List[List[Box]] = [[]]
     for i in range(1, len(samples)):
         res = diff_boxes(samples[i - 1][1], samples[i][1], mask_rects)
         active.append(res.changed_frac >= config.SCREEN_ACTIVE_FRAC)
+        fracs.append(res.changed_frac)
+        sample_boxes.append(res.boxes)
         timeline.activity.append((round(samples[i][0], 3), round(res.changed_frac, 5), len(res.boxes)))
 
     # Pass 2: group runs of active samples into events; a run ends after SETTLE_S of stillness.
     runs: List[Tuple[int, int]] = []  # inclusive sample indices (first_active, last_active)
     start: Optional[int] = None
     last_active = -1
+    run_boxes: List[Box] = []
     for i in range(1, len(samples)):
         gap = samples[i][0] - samples[last_active][0] if last_active >= 0 else 0.0
         settled = gap >= config.SCREEN_SETTLE_S - 1e-6
@@ -136,9 +175,19 @@ def build_screen_timeline(
             if start is not None and settled:
                 runs.append((start, last_active))  # the previous burst had already gone still
                 start = None
+            elif (
+                start is not None
+                and config.SCREEN_SPLIT_ON_LOCUS_SHIFT
+                and i - last_active > 1  # a still sample sits between: two actions, not one animation
+                and not _touches(sample_boxes[i], run_boxes, config.SCREEN_LOCUS_MARGIN_PX)
+            ):
+                runs.append((start, last_active))
+                start = None
             if start is None:
                 start = i
+                run_boxes = []
             last_active = i
+            run_boxes.extend(sample_boxes[i])
         elif start is not None and settled:
             runs.append((start, last_active))
             start = None
@@ -150,8 +199,11 @@ def build_screen_timeline(
         t_after, after = samples[last]
         net = diff_boxes(before, after, mask_rects)
         coverage = _bbox_coverage(net.boxes, width, height)
-        if _is_scroll(before, after, net.changed_frac):
+        shift = _scroll_shift(before, after, net.changed_frac)
+        residual: List[Box] = []
+        if shift is not None:
             etype = "large_shift"
+            residual = _residual_boxes(before, after, shift)
         elif coverage >= config.SCREEN_SCENE_COVERAGE and net.changed_frac >= config.SCREEN_SCENE_MIN_CHANGED:
             etype = "scene_cut"
         else:
@@ -160,6 +212,16 @@ def build_screen_timeline(
         before_name, after_name = frame_name_for(t_before), frame_name_for(t_after)
         cv2.imwrite(str(key_dir / before_name), before)
         cv2.imwrite(str(key_dir / after_name), after)
+
+        # A change that came and went (dropdown opened and closed) leaves before == after. Keep the
+        # most-changed sample so the interaction stays inspectable; it is NOT a committed change.
+        transient = not net.boxes and etype == "local"
+        peak_name: Optional[str] = None
+        if transient:
+            peak_i = max(range(first, last + 1), key=lambda k: fracs[k])
+            peak_name = frame_name_for(samples[peak_i][0])
+            cv2.imwrite(str(key_dir / peak_name), samples[peak_i][1])
+
         timeline.events.append(
             ScreenEvent(
                 event_id=f"ev-{n:03d}",
@@ -172,6 +234,9 @@ def build_screen_timeline(
                 before_frame=f"keyframes/{before_name}",
                 after_frame=f"keyframes/{after_name}",
                 scene_label=chrome_text(after, ocr) if (etype == "scene_cut" and ocr) else None,
+                transient=transient,
+                peak_frame=f"keyframes/{peak_name}" if peak_name else None,
+                residual_bboxes=residual,
             )
         )
 

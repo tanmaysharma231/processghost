@@ -17,7 +17,10 @@ from typing import Any, Dict, List
 from scripts import pipeline_spec as spec
 
 DOCS = spec.DOCS
-OPT_IN = {"screen", "align", "reconcile"}  # stages that run only with --screen
+OPT_IN = {  # stage id -> the command-line option that enables it
+    "screen": "--screen", "surface": "--screen", "align": "--screen", "reconcile": "--screen", "investigate": "--screen",
+    "document": "--workbook",
+}
 KIND_LABEL = {"llm": "LLM", "code": "CODE", "hybrid": "LLM + CODE"}
 STATUS_NOTE = {
     "built": "built and exercised",
@@ -35,7 +38,7 @@ def build_data() -> Dict[str, Any]:
         stages.append(
             {
                 **{k: s[k] for k in ("id", "num", "name", "lane", "kind", "status", "short", "inputs", "outputs", "model", "tree", "failure", "measured", "issues")},
-                "optin": s["id"] in OPT_IN,
+                "optin": OPT_IN.get(s["id"], ""),
                 "knobs": [{"name": n, "value": spec.knob_value(n)} for n in s["knobs"]],
                 "prompts": [{"name": n, "text": spec.prompt_text(n)} for n in s["prompts"]],
             }
@@ -75,12 +78,12 @@ def render_markdown() -> str:
     lines += [f"| {k} | {v} |" for k, v in STATUS_NOTE.items()]
     lines += ["", "Kinds: **LLM** calls a model; **CODE** is plain Python; **LLM + CODE** calls a model and verifies or acts on its answer in code.", "", "## The pipeline at a glance", "", "| Stage | Kind | Status | Runs | What happens on failure |", "|---|---|---|---|---|"]
     for s in data["stages"]:
-        runs = "with `--screen`" if s["optin"] else "always"
+        runs = f"with `{s['optin']}`" if s["optin"] else "always"
         lines.append(f"| {s['num']} {s['name']} | {KIND_LABEL[s['kind']]} | {s['status']} | {runs} | {_flat(s['failure'])} |")
 
     lines += ["", "## Stage by stage", ""]
     for s in data["stages"]:
-        lines += [f"### {s['num']} - {s['name']}", "", f"{s['short']}", "", f"- Kind: {KIND_LABEL[s['kind']]} | Status: {s['status']} | Model: {s['model']}" + (" | Runs only with `--screen`" if s["optin"] else "")]
+        lines += [f"### {s['num']} - {s['name']}", "", f"{s['short']}", "", f"- Kind: {KIND_LABEL[s['kind']]} | Status: {s['status']} | Model: {s['model']}" + (f" | Runs only with `{s['optin']}`" if s["optin"] else "")]
         lines.append("- Takes in: " + "; ".join(s["inputs"]))
         lines.append("- Produces: " + "; ".join(s["outputs"]))
         if s["prompts"]:
@@ -347,7 +350,7 @@ details.dec .title { font-weight: 500; flex: 1 1 260px; min-width: 0; }
     b.setAttribute('aria-pressed', String(state.stage === s.id));
     var head = el('div', 'head');
     add(head, chip(s.num, 'num'), chip(KIND[s.kind], s.kind), chip(s.status, s.status));
-    if (s.optin) add(head, chip('--screen', 'optin'));
+    if (s.optin) add(head, chip(s.optin, 'optin'));
     add(b, head, el('div', 'name', s.name), el('div', 'short', s.short));
     return b;
   }
@@ -367,11 +370,11 @@ details.dec .title { font-weight: 500; flex: 1 1 260px; min-width: 0; }
     add(inp, el('p', 'group-label', 'Input'), box(byId.input));
     add(f, inp, el('div', 'conn'));
     var lanes = el('div', 'lanes');
-    add(lanes, lane('What was said', ['transcribe', 'writer', 'reviewer']), lane('What changed on screen (optional)', ['screen', 'align']));
+    add(lanes, lane('What was said', ['transcribe', 'writer', 'reviewer']), lane('What changed on screen (optional)', ['screen', 'surface', 'align']));
     add(f, lanes, el('div', 'join', 'both meet here'));
     var m = el('div', 'row');
     var mr = el('div', 'merge-row');
-    ['reconcile', 'checker', 'triage', 'outputs'].forEach(function (id) { add(mr, box(byId[id])); });
+    ['reconcile', 'checker', 'document', 'investigate', 'triage', 'outputs'].forEach(function (id) { add(mr, box(byId[id])); });
     add(m, el('p', 'group-label', 'Reconcile, check, decide, deliver'), mr);
     add(f, m);
     var x = el('div', 'row');
@@ -449,7 +452,7 @@ details.dec .title { font-weight: 500; flex: 1 1 260px; min-width: 0; }
     add(h, chip(s.num, 'num'), s.name);
     var chips = el('div', 'chips');
     add(chips, chip(KIND[s.kind], s.kind), chip(s.status, s.status));
-    if (s.optin) add(chips, chip('runs only with --screen', 'optin'));
+    if (s.optin) add(chips, chip('runs only with ' + s.optin, 'optin'));
     add(chips, el('span', 'chip', s.model));
     add(head, h, el('p', 'sub', s.short), chips);
     add(d, head);

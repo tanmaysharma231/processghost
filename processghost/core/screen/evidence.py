@@ -20,7 +20,9 @@ import numpy as np
 
 from core import config
 from core.models.screen import ScreenEvent
+from core.screen.evidence_id import box_part, evidence_id
 from core.screen.ocr import OcrFn
+from core.screen.regions import plan_regions
 from core.screen.timeline import chrome_text
 
 
@@ -30,6 +32,7 @@ class EvidencePack(NamedTuple):
     event_ids: List[str]
     after_frames: List[Path]  # full-res keyframes used, recorded as the Resolution's evidence
     description: str  # what each image is, for the prompt
+    evidence_ids: tuple = ()  # stable ids (core/screen/evidence_id.py) of the artifacts above, for traces
 
 
 def select_events(flag_event_ids: List[str], all_events: List[ScreenEvent], center_t: float, level: int) -> List[ScreenEvent]:
@@ -66,10 +69,16 @@ def _label_bar(width: int, text: str) -> np.ndarray:
     return bar
 
 
+def _event_regions(after: np.ndarray, boxes) -> list:
+    """Region group boxes for one event: merged by proximity, never dropped by size (ADR 0010)."""
+    h_img, w_img = after.shape[:2]
+    groups = plan_regions(boxes, config.SCREEN_EVIDENCE_MAX_BOXES, w_img, h_img, config.SCREEN_REGION_MAX_CROP_FRAC)
+    return [g.box for g in groups]
+
+
 def _tile_strip(before: np.ndarray, after: np.ndarray, boxes, event_id: str) -> Optional[np.ndarray]:
-    biggest = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)[: config.SCREEN_EVIDENCE_MAX_BOXES]
     tiles = []
-    for n, box in enumerate(sorted(biggest, key=lambda b: (b[1], b[0])), start=1):
+    for n, box in enumerate(_event_regions(after, boxes), start=1):
         b_crop = _padded_crop(before, box, config.SCREEN_CROP_PAD_PX)
         a_crop = _padded_crop(after, box, config.SCREEN_CROP_PAD_PX)
         if b_crop.size == 0 or a_crop.size == 0:
@@ -90,9 +99,14 @@ def _fit(img: np.ndarray, width: int) -> np.ndarray:
 
 
 def build_evidence(
-    events: List[ScreenEvent], timeline_dir: Path, out_dir: Path, ocr: Optional[OcrFn] = None
+    events: List[ScreenEvent],
+    timeline_dir: Path,
+    out_dir: Path,
+    ocr: Optional[OcrFn] = None,
+    video_sha: Optional[str] = None,
 ) -> EvidencePack:
     out_dir.mkdir(parents=True, exist_ok=True)
+    ids: List[str] = []
     images: List[Path] = []
     ocr_parts: List[str] = []
     desc: List[str] = []
@@ -108,24 +122,27 @@ def build_evidence(
         full = out_dir / f"{ev.event_id}_full.png"
         cv2.imwrite(str(full), _resize_w(after, config.SCREEN_EVIDENCE_FULL_WIDTH))
         images.append(full)
+        ids.append(evidence_id(video_sha, "context_frame", ev.after_frame, config.SCREEN_EVIDENCE_FULL_WIDTH))
         desc.append(f"{ev.event_id} ({ev.type}, t={ev.t_start:.1f}s): full after-frame, downscaled")
 
-        strip = _tile_strip(before, after, ev.bboxes, ev.event_id)
+        strip = _tile_strip(before, after, ev.region_boxes(), ev.event_id)
         if strip is not None:
             tiles = out_dir / f"{ev.event_id}_tiles.png"
             cv2.imwrite(str(tiles), strip)
             images.append(tiles)
+            ids.append(evidence_id(video_sha, "tiles", ev.event_id, *[box_part(b) for b in ev.region_boxes()]))
             desc.append(f"{ev.event_id}: numbered tiles of the changed regions (top = before, bottom = after)")
 
         if ev.type == "scene_cut":
             low = out_dir / f"{ev.event_id}_before.png"
             cv2.imwrite(str(low), _resize_w(before, config.SCREEN_EVIDENCE_BEFORE_WIDTH))
             images.append(low)
+            ids.append(evidence_id(video_sha, "before_frame", ev.before_frame, config.SCREEN_EVIDENCE_BEFORE_WIDTH))
             desc.append(f"{ev.event_id}: low-resolution frame from before the switch")
 
         if ocr is not None:
             parts = [f"[{ev.event_id} screen chrome (title, tabs, status bar)] {chrome_text(after, ocr) or '(nothing legible)'}"]
-            for n, box in enumerate(sorted(ev.bboxes, key=lambda b: b[2] * b[3], reverse=True)[: config.SCREEN_EVIDENCE_MAX_BOXES], 1):
+            for n, box in enumerate(_event_regions(after, ev.region_boxes()), 1):
                 crop = _padded_crop(after, box, config.SCREEN_CROP_PAD_PX)
                 if crop.size:
                     parts.append(f"[{ev.event_id} changed region {n}, after] {ocr(crop) or '(nothing legible)'}")
@@ -137,4 +154,5 @@ def build_evidence(
         event_ids=[e.event_id for e in events],
         after_frames=after_frames,
         description="\n".join(f"- {d}" for d in desc),
+        evidence_ids=tuple(ids),
     )

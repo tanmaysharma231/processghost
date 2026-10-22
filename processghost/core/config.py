@@ -29,7 +29,15 @@ VISION_MAX_DIMENSION: int = 1024
 # + Sarvam document-intelligence OCR (no true vision model exists on Sarvam -- see
 # core/llm/sarvam_client.py and core/pipeline.py for the OCR-extract-then-text-reason design this
 # implies). Requires SARVAM_API_KEY.
-LLM_PROVIDER: Literal["openai", "sarvam"] = "sarvam"
+LLM_PROVIDER: Literal["openai", "sarvam", "anthropic"] = "sarvam"
+
+# Models -- Anthropic provider (core/llm/anthropic_client.py). Reasoning is on Claude; transcription still
+# uses OpenAI Whisper because Anthropic has no speech-to-text. UNVERIFIED against the live API: built on the
+# installed langchain-anthropic and tested with fakes only. Sampling settings are not sent (the newest
+# models reject non-default temperature), so LLM_TEMPERATURE does not apply to this provider.
+ANTHROPIC_MODEL_TEXT = "claude-sonnet-5-5"
+ANTHROPIC_MODEL_VISION = "claude-sonnet-5-5"
+ANTHROPIC_MAX_TOKENS: int = 16000
 
 # Models -- Sarvam provider
 SARVAM_MODEL_CHAT = "sarvam-105b"
@@ -78,6 +86,12 @@ SCREEN_SCROLL_MIN_SHIFT_PX: float = 8.0  # vertical shift (diff-frame px) that c
 SCREEN_SCROLL_MIN_RESPONSE: float = 0.3  # phase-correlation confidence required to call it a scroll
 SCREEN_TOP_STRIP_PCT: float = 0.12  # OCR'd for window/page/toolbar text when labelling a scene
 SCREEN_BOTTOM_STRIP_PCT: float = 0.15  # OCR'd for tab/status-bar text (sheet or page names live here)
+# Split one run of activity into two events when, after a still sample, the next change happens
+# somewhere that does not touch the run's earlier changes (two quick actions in different places).
+# OFF by default: it contradicts "changes inside the settle window are one event" (tests/test_screen_timeline.py)
+# and has not been measured on a real recording. Turn on per run to compare.
+SCREEN_SPLIT_ON_LOCUS_SHIFT: bool = False
+SCREEN_LOCUS_MARGIN_PX: int = 24  # boxes closer than this (original pixels) count as the same locus
 # (x, y, w, h) rectangles in original pixels that never count as change (meeting thumbnails, clock).
 SCREEN_MASK_RECTS: tuple = ()
 
@@ -93,7 +107,7 @@ SCREEN_ALIGN_MAX_EVENTS_PER_STEP: int = 2
 SCREEN_EVIDENCE_FULL_WIDTH: int = 1024  # full after-frame is downscaled to this width: context, not detail
 SCREEN_EVIDENCE_BEFORE_WIDTH: int = 512  # low-res before-frame, sent for context switches only
 SCREEN_CROP_PAD_PX: int = 60  # padding (original pixels) around each changed box, to catch nearby headers
-SCREEN_EVIDENCE_MAX_BOXES: int = 4  # largest changed boxes tiled per event
+SCREEN_EVIDENCE_MAX_BOXES: int = 4  # region groups tiled per event (merged by proximity, never dropped by size)
 SCREEN_EVIDENCE_MAX_IMAGES: int = 6  # hard cap on images in one Checker call
 SCREEN_ESCALATION_EVENTS: int = 2  # level 1 widens to this many events either side of the nearest
 # A "resolved" verdict whose observation shares at least this fraction of its content words with the
@@ -102,9 +116,45 @@ CHECKER_ECHO_MAX: float = 0.8
 
 # --- Reconciler (docs/24) ---
 SCREEN_RECORD_CROP_PAD_PX: int = 20  # padding around a changed box before OCR'ing it for the change record
-SCREEN_RECORD_MAX_REGIONS: int = 3  # largest changed boxes recorded per event
+SCREEN_RECORD_MAX_REGIONS: int = 3  # region GROUPS recorded per event; boxes are merged by proximity, never dropped by size (ADR 0010)
+SCREEN_REGION_MAX_CROP_FRAC: float = 0.5  # a merged group larger than this share of the frame is split back (untuned)
 SCREEN_RECORD_MAX_CHARS: int = 500  # each OCR field is truncated to this before it is sent to the model
 RECONCILER_MAX_QUESTIONS_PER_STEP: int = 3
+
+# --- Surface locators and context map (ADR 0013). All untuned starting guesses. ---
+SURFACE_MIN_CONFIDENCE: float = 0.4  # a profile must score at least this to be trusted; else the generic fallback
+# Narration lagged actions by 4-5 s on the one measured clip (docs/24), so the window reaches far AFTER the
+# event and only a little before it (a speaker announcing the move in advance).
+SURFACE_SPEECH_WINDOW_BEFORE_S: float = 2.0
+SURFACE_SPEECH_WINDOW_AFTER_S: float = 5.0
+SURFACE_SPEECH_MIN_RATIO: float = 0.6  # difflib ratio for a spoken word to count as naming a locator token
+CONTEXT_MAX_OCR_CHARS: int = 800  # cap on the labels read from a context's first full frame
+
+# --- Event classes, selection anchors and reading fallback (docs/26 flow plan). All untuned starting guesses. ---
+SCREEN_TEXT_CHANGE_MIN_RATIO: float = 0.9  # before/after text with a difflib ratio at or above this is "the same" (OCR jitter)
+ANCHOR_VALUE_WINDOW_S: float = 20.0  # a later data change this soon after a selection can be its paste target
+ANCHOR_POINTER_WORDS: tuple = ("this", "here", "that", "these", "there")  # English only for now
+OCR_RETRY_VARIANTS: int = 3  # re-reads of a failed field with a changed input: upscale, contrast, wider padding
+VLM_READ_MAX_CROPS: int = 12  # failed crops sent to the cheap vision model per run; over the cap they stay unread
+
+# --- Step slots (docs/26 flow plan) ---
+SLOT_SHOWN_WINDOW_S: float = 1.0  # a step known only from the screen has no spoken window; its flags use [t, t + this]
+
+# --- Document rung: read-only workbook access (docs/26 flow plan). All untuned starting guesses. ---
+DATA_ROW_CAP: int = 25  # rows one tool call may return
+DATA_CELL_MAX_CHARS: int = 200  # a cell string is cut to this before it reaches the model
+DATA_DISTINCT_MAX: int = 12  # a column with at most this many distinct values lists them all in the profile
+DATA_MAX_CALLS_PER_FLAG: int = 4  # tool rounds per question; one more round is allowed, but only to give a verdict
+DATA_ROUTE_NON_SLOT: bool = False  # also send questions that are not one of a data step's four slots to the model loop
+DATA_MAX_ROUTED_FLAGS: int = 12  # questions sent to the document rung per run
+DATA_PASS_BUDGET_USD: float = 0.30  # estimated spend on the document rung; the rest are skipped, never silently dropped
+DATA_MAX_WORKBOOK_BYTES: int = 20 * 1024 * 1024
+
+# --- Retrieval library inspection budget (ADR 0012). Starting guesses; a cache hit costs nothing. ---
+INSPECT_MAX_IMAGES: int = 12  # full frames, comparisons and keyframes handed out per retriever
+INSPECT_MAX_CROPS: int = 8
+INSPECT_MAX_EXPANSIONS: int = 3  # expand_interval calls
+INSPECT_MAX_RETRIES_PER_EPISODE: int = 2  # re-inspections of the same interval at a different detail level
 
 # --- Pre-meeting intake ------------------------------------------------------
 # Ingestion limits for docs/19-pre-meeting-intake.md's stage-1 source reading (core/io/documents.py).
@@ -125,6 +175,10 @@ PRICING_PER_1M_TOKENS: dict[str, tuple[float, float]] = {
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "sarvam-105b": (0.04, 0.17),
+    # Anthropic, from the Claude API reference cached 2026-10-06 (Haiku 5.5 is for prompts up to 100K tokens).
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-haiku-5-5": (0.10, 0.50),
 }
 # Non-token-based costs, priced by their own real unit -- forcing these into the token table above
 # would silently misprice them.

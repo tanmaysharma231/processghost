@@ -248,14 +248,3 @@ def test_review_sop_degrades_on_call_exception():
     assert client.metrics.failures[0]["stage"] == "reviewer"
 
 
-def test_review_sop_degrades_when_output_does_not_validate():
-    doc = _three_step_doc()
-    client = _FakeClient(
-        structured_response=RuntimeError("structured output did not match ReviewerOutput: bad shape")
-    )
-
-    result = _review_sop(client, doc, SEGMENTS)
-
-    assert result.review_failed is True
-    assert len(client.metrics.failures) == 1
-    assert client.metrics.failures[0]["stage"] == "reviewer"

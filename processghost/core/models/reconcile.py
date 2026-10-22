@@ -8,7 +8,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from core.models.sop import Severity
+from core.models.sop import Severity, SlotName
 
 
 class QuotedEvidence(BaseModel):
@@ -21,17 +21,28 @@ class UnspecifiedQuestion(BaseModel):
     severity: Severity = "caution"
 
 
+class SlotFillClaim(BaseModel):
+    slot: SlotName
+    value: str = ""
+    evidence: List[QuotedEvidence] = Field(default_factory=list)  # verbatim quotes from the cited events' records
+
+
 class StepReconciliation(BaseModel):
     step_id: str
     event_ids: List[str] = Field(default_factory=list)  # events that realise this step; [] if none do
     what_changed: str = ""  # written only from the cited records; "" if no event shows this step
     evidence: List[QuotedEvidence] = Field(default_factory=list)
     unspecified: List[UnspecifiedQuestion] = Field(default_factory=list)  # still open after reading the records
+    slot_fills: List[SlotFillClaim] = Field(default_factory=list)  # answers to the step's open slots, from the records
 
 
 class EventAssignment(BaseModel):
     event_id: str
     step_id: Optional[str] = None  # None: no narrated step explains this event
+    # Only for an event no step explains: what was done, written from the record, with verbatim quotes.
+    # A grounded action makes the event a "shown" step; an ungrounded one leaves it a silent-change flag.
+    action: str = ""
+    evidence: List[QuotedEvidence] = Field(default_factory=list)
 
 
 class ClaimCheck(BaseModel):

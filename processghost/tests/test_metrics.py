@@ -118,12 +118,6 @@ def test_record_payload_does_not_affect_cost_or_token_accounting():
     assert m.records == []
 
 
-def test_record_payload_no_trace_file_written_when_trace_path_is_none(tmp_path):
-    m = Metrics()
-    m.record_payload("writer", {"steps": []})
-    assert list(tmp_path.iterdir()) == []
-
-
 def test_multiple_calls_append_multiple_lines_in_order(tmp_path):
     trace_path = tmp_path / "trace.jsonl"
     m = Metrics(trace_path=trace_path)
@@ -137,12 +131,15 @@ def test_multiple_calls_append_multiple_lines_in_order(tmp_path):
     assert stages == ["writer", "reviewer", "checker"]
 
 
-def test_no_trace_file_written_when_trace_path_is_none(tmp_path):
+def test_no_trace_file_written_when_trace_path_is_none(tmp_path, monkeypatch):
     """Default behavior (trace_path=None) must not write anywhere -- back-compat for any caller
-    that constructs Metrics() without one."""
+    that constructs Metrics() without one. The working directory is the empty tmp dir, so a stray
+    relative-path write by any of these calls would show up in it."""
+    monkeypatch.chdir(tmp_path)
     m = Metrics()
     m.add({"prompt_tokens": 1, "completion_tokens": 1}, "gpt-4o", stage="writer")
     m.record_failure("writer", "boom")
+    m.record_payload("writer", {"steps": []})
     assert list(tmp_path.iterdir()) == []
 
 

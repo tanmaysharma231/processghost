@@ -25,17 +25,19 @@ for every reasoning call, so _write_sop/_review_sop/_run_checker are provider-ag
 """
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from core import config
 from core.io import storage
 from core.io import video as video_io
+from core.llm.anthropic_client import AnthropicClient
 from core.llm.client import LLMClient, Metrics, persist_metrics, persist_run_json
 from core import retention
-from core.guards import validate_input
+from core.guards import validate_input, validate_workbook
 from core.manifest import build_manifest
 from core.llm import prompts
 from core.llm.parsing import (
@@ -64,10 +66,35 @@ from core.models.reconcile import ReconcilerOutput
 from core.screen.evidence import build_evidence, select_events
 from core.screen.ocr import get_ocr
 from core.screen.reconcile import build_reconciler_input, merge_reconciler_output
-from core.screen.records import build_change_records
+from core.models.screen import ChangeRecord, ContextMap, Investigation, SelectionAnchor, UnusedEvent
+from core.screen.anchors import build_anchors
+from core.screen.cell_trail import build_trail
+from core.screen.classify import classify_records, sent_to_reconciler, unused_from_classes
+from core.screen.read_fallback import repair_records
+from core.screen.slot_fills import fill_slots_from_anchors
+from core.data.answer import deterministic_outcomes, enrich_slots
+from core.data.apply import apply_outcome, attach_attempt, skipped_attempt
+from core.data.checker import check_flag_with_data
+from core.data.guard import guard_claims
+from core.data.match import check_match, frame_texts
+from core.data.repeat import add_repeat_questions
+from core.data.profile import profile_workbook
+from core.data.tools import WorkbookTools
+from core.ladder import record_video_rungs, route_to_document
+from core.screen.context import build_contexts
+from core.screen.investigate import (
+    attach_evidence_ids,
+    build_investigations,
+    coverage_of,
+    explained_event_ids,
+    update_status,
+)
+from core.screen.records import build_change_records, cached_ocr
+from core.screen.speech_clue import attach_speech_clues
 from core.screen.timeline import build_screen_timeline
 from report import sop_render
 from report.build_spec import write_build_spec
+from report.flow import write_flow
 
 
 def _make_client(metrics: Metrics):
@@ -78,6 +105,8 @@ def _make_client(metrics: Metrics):
     _write_sop/_review_sop/the Checker work unchanged regardless of which one is active."""
     if config.LLM_PROVIDER == "sarvam":
         return SarvamClient(metrics=metrics)
+    if config.LLM_PROVIDER == "anthropic":
+        return AnthropicClient(metrics=metrics)
     return LLMClient(metrics=metrics)
 
 
@@ -186,14 +215,14 @@ def _review_sop(client, doc: SOPDocument, segments_raw: list[dict]) -> SOPDocume
         return doc.model_copy(update={"review_failed": True})
 
 
-def _select_flags_for_check(doc: SOPDocument) -> Tuple[List[Flag], List[Flag]]:
+def _select_flags_for_check(doc: SOPDocument, skip_slots: Tuple[str, ...] = ()) -> Tuple[List[Flag], List[Flag]]:
     """Sort open flags by severity (blocking first per the original plan) and split at
     config.MAX_CHECKED_FLAGS. The trailing half is never silently dropped -- run_checker marks
     each one status="unchecked" rather than leaving it "open" and indistinguishable from a flag
     that was never even considered."""
     severity_order = {"blocking": 0, "caution": 1, "note": 2}
     open_flags = sorted(
-        (f for f in doc.flags if f.status == "open"), key=lambda f: severity_order.get(f.severity, 3)
+        (f for f in doc.flags if f.status == "open" and f.slot not in skip_slots), key=lambda f: severity_order.get(f.severity, 3)
     )
     return open_flags[: config.MAX_CHECKED_FLAGS], open_flags[config.MAX_CHECKED_FLAGS :]
 
@@ -426,7 +455,9 @@ def _check_flag_with_events(
             events = select_events(flag.event_ids, timeline.events, (w0 + w1) / 2.0, level)
             if not events:
                 raise RuntimeError("no screen events attached to this flag")
-            pack = build_evidence(events, timeline_dir, evidence_dir / flag.flag_id / f"level{level}", ocr)
+            pack = build_evidence(
+                events, timeline_dir, evidence_dir / flag.flag_id / f"level{level}", ocr, video_sha=timeline.video_sha
+            )
             if not pack.after_frames:
                 raise RuntimeError("no readable keyframes for this flag's events")
             use_images = level == 1 and config.LLM_PROVIDER != "sarvam" and bool(pack.images)
@@ -443,7 +474,7 @@ def _check_flag_with_events(
                 CheckerOutput,
                 images=pack.images if use_images else None,
                 stage="checker",
-                payload_extra={"flag_id": flag.flag_id, "level": level, "tier": tier},
+                payload_extra={"flag_id": flag.flag_id, "level": level, "tier": tier, "evidence_ids": list(pack.evidence_ids)},
             )
             output = _downgrade_echo(output, prompt_text)
             if output.verdict != "unresolvable":
@@ -468,6 +499,7 @@ def _run_checker(
     timeline=None,
     timeline_dir: Optional[Path] = None,
     ocr=None,
+    skip_slots: Tuple[str, ...] = (),
 ) -> SOPDocument:
     """Phase 3: resolve every open flag, severity-first, up to MAX_CHECKED_FLAGS. Frame extraction
     reuses core/io/video.py: extract_frames_window as-is -- it already handles cross-flag frame
@@ -477,7 +509,7 @@ def _run_checker(
     job-based OCR has real per-job latency, so one job per flag would be unacceptable; OpenAI skips
     this and sends real frames per call instead.
     """
-    checked, unchecked = _select_flags_for_check(doc)
+    checked, unchecked = _select_flags_for_check(doc, skip_slots)
     if not checked and not unchecked:
         return doc
 
@@ -575,21 +607,151 @@ def _align_stage(
         return doc
 
 
-def _reconcile_stage(
-    client, run_dir: Path, doc: SOPDocument, timeline, segments_raw: list[dict], transcript: List[TranscriptSegment]
-) -> Optional[SOPDocument]:
-    """Stage 2c (docs/24): one batched call mapping steps onto screen events and saying what changed
-    for every step. Returns None on any failure (recorded as `reconcile_failed`) so the caller falls
-    back to Align's counting heuristic."""
+class SurfaceResult(NamedTuple):
+    timeline: object
+    records: List[ChangeRecord]
+    anchors: List[SelectionAnchor]
+    unused: List[UnusedEvent]
+    contexts: List[ContextMap]
+
+
+def _surface_stage(client, run_dir: Path, timeline, segments_raw: list[dict]) -> Optional[SurfaceResult]:
+    """Stage 0c (ADR 0013, Trigger A): change records with surface locators, unread selected-cell fields
+    repaired (retry with a changed input, then one batched cheap-model read), event classes by state
+    change, selection anchors joined to speech and later values by time, speech clues, and the context
+    map. Non-fatal -- returns None on any failure (recorded as `surface_failed`) and the run continues
+    without locators, exactly as before this stage existed."""
     try:
         ocr = get_ocr()
         if ocr is None:
             raise RuntimeError("no local OCR engine available (pip install rapidocr-onnxruntime)")
-        records = build_change_records(timeline, run_dir / "screen", ocr)
+        screen_dir = run_dir / "screen"
+        records = build_change_records(timeline, screen_dir, ocr)
+        records, read_stats = repair_records(records, timeline, screen_dir, cached_ocr(ocr), client, screen_dir / "reads")
+        client.metrics.record_payload("read_fallback", dict(read_stats))
+        records = classify_records(attach_speech_clues(records, segments_raw))
+        anchors, unused_selections = build_anchors(records, segments_raw)
+        contexts, timeline, records = build_contexts(timeline, records, screen_dir, cached_ocr(ocr))
+        (screen_dir / "screen_events.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
         storage.save_json([r.model_dump(mode="json") for r in records], run_dir / "change_records.json")
+        storage.save_json([c.model_dump(mode="json") for c in contexts], run_dir / "contexts.json")
+        storage.save_json([a.model_dump(mode="json") for a in anchors], run_dir / "anchors.json")
+        return SurfaceResult(timeline, records, anchors, unused_from_classes(records) + unused_selections, contexts)
+    except Exception as exc:  # noqa: BLE001 - locators are additive; their failure must not lose the run
+        client.metrics.record_failure("surface_failed", str(exc))
+        return None
+
+
+def _document_stage(
+    client,
+    run_dir: Path,
+    doc: SOPDocument,
+    workbook: Path,
+    records: Optional[List[ChangeRecord]] = None,
+    timeline=None,
+    contexts: Optional[List[ContextMap]] = None,
+) -> SOPDocument:
+    """The document rung (docs/26 flow plan): profile the workbook with no model, then let a short loop of
+    read-only lookups try the questions the video left open (and cross-check blocking ones the video resolved).
+    Non-fatal: any failure is recorded as `document_failed` and the document comes back unchanged. The
+    workbook is opened as a copy and its hash is checked again at the end."""
+    try:
+        tools = WorkbookTools(workbook, run_dir / "workbook")
+        profile = profile_workbook(tools.copy_path).model_copy(update={"workbook": tools.name, "sha256": tools.sha256_original})
+        storage.save_json(profile.model_dump(mode="json"), run_dir / "workbook_profile.json")
+        trail = build_trail(records or [], [s.name for s in profile.sheets])
+        storage.save_json([t.model_dump(mode="json") for t in trail], run_dir / "cell_trail.json")
+
+        # Is this the workbook that was open in the recording? Answers drawn from a different file would be about the wrong file.
+        ocr = get_ocr() if records and timeline is not None and contexts else None
+        texts = frame_texts(contexts, timeline, run_dir / "screen", cached_ocr(ocr)) if ocr is not None else {}
+        match = check_match(records or [], trail, texts, tools)  # "unknown" when there is nothing from the recording to compare
+        doc = doc.model_copy(update={"workbook_match": match})
+        storage.save_json(match.model_dump(mode="json"), run_dir / "workbook_match.json")
+        if match.verdict == "mismatch":
+            client.metrics.record_failure("workbook_mismatch", "; ".join(i.detail for i in match.issues))
+            routed, overflow = route_to_document(doc, True)
+            for flag in routed + overflow:
+                doc = attach_attempt(doc, flag.flag_id, skipped_attempt("not checked: the workbook does not match the recording"))
+            return doc
+
+        # A number in a video claim must belong to a cell that depends on something this recording changed.
+        doc = guard_claims(enrich_slots(doc, trail, tools), trail, tools)
+        # What code can answer exactly is answered without a model: the cells that were used are known, the formulas that read
+        # them and the columns that carry the same value on two sheets are facts in the file.
+        for flag_id, outcome in deterministic_outcomes(doc, trail, profile, tools).items():
+            doc = apply_outcome(doc, flag_id, outcome)
+        doc = add_repeat_questions(doc, trail, tools)  # the recording shows one item; the workbook shows how many the process covers
+        observed = [{"sheet": t.sheet, "cell": t.cell, "content": t.content} for t in trail]
+        routed, overflow = route_to_document(doc, True)
+        for flag in overflow:
+            doc = attach_attempt(doc, flag.flag_id, skipped_attempt("not routed: over this run's document-rung question cap"))
+        start_cost = client.metrics.cost_usd
+        for flag in routed:
+            if client.metrics.over_budget() or client.metrics.cost_usd - start_cost >= config.DATA_PASS_BUDGET_USD:
+                client.metrics.record_failure("document_budget", "document-rung spend limit reached", meta={"flag_id": flag.flag_id})
+                doc = attach_attempt(doc, flag.flag_id, skipped_attempt("not checked: the document-rung spend limit was reached"))
+                continue
+            try:
+                doc = apply_outcome(doc, flag.flag_id, check_flag_with_data(client, flag, doc, profile, tools, observed=observed))
+            except Exception as exc:  # noqa: BLE001 - one question failing must not lose the others
+                client.metrics.record_failure("document_check_failed", str(exc), meta={"flag_id": flag.flag_id})
+                doc = attach_attempt(doc, flag.flag_id, skipped_attempt("the document check itself failed"))
+        if not tools.verify_unchanged():
+            client.metrics.record_failure("workbook_changed", "the source workbook's hash changed during the run")
+        return doc
+    except Exception as exc:  # noqa: BLE001 - the document rung is additive; its failure must not lose the run
+        client.metrics.record_failure("document_failed", str(exc))
+        return doc
+
+
+def _investigate_stage(client, run_dir: Path, timeline, records, doc: SOPDocument, transcript) -> Optional[List[Investigation]]:
+    """Merge the three triggers into investigations (ADR 0011). Non-fatal; statuses are filled in by
+    `_finish_investigations` once the Checker has run."""
+    try:
+        align_path = run_dir / "alignment.json"
+        align_records = json.loads(align_path.read_text(encoding="utf-8")).get("records", []) if align_path.exists() else []
+        explained = explained_event_ids(doc, align_records)
+        return build_investigations(timeline, records or [], doc, transcript, explained)
+    except Exception as exc:  # noqa: BLE001
+        client.metrics.record_failure("investigate_failed", str(exc))
+        return None
+
+
+def _finish_investigations(client, run_dir: Path, invs: List[Investigation], doc: SOPDocument, timeline) -> SOPDocument:
+    """After the Checker: record what was and was not examined, in investigations.json and on the SOP."""
+    align_path = run_dir / "alignment.json"
+    align_records = json.loads(align_path.read_text(encoding="utf-8")).get("records", []) if align_path.exists() else []
+    explained = explained_event_ids(doc, align_records)
+    budget_exceeded = any(f.get("stage") == "budget_exceeded" for f in client.metrics.failures)
+    invs = attach_evidence_ids(update_status(invs, doc, explained, budget_exceeded=budget_exceeded), timeline)
+    storage.save_json([v.model_dump(mode="json") for v in invs], run_dir / "investigations.json")
+    return doc.model_copy(update={"screen_coverage": coverage_of(invs)})
+
+
+def _reconcile_stage(
+    client,
+    run_dir: Path,
+    doc: SOPDocument,
+    timeline,
+    segments_raw: list[dict],
+    transcript: List[TranscriptSegment],
+    records: Optional[List[ChangeRecord]] = None,
+    anchors: Optional[List[SelectionAnchor]] = None,
+) -> Optional[SOPDocument]:
+    """Stage 2c (docs/24): one batched call mapping steps onto screen events and saying what changed
+    for every step. Returns None on any failure (recorded as `reconcile_failed`) so the caller falls
+    back to Align's counting heuristic. `records` come from the surface stage when it ran."""
+    try:
+        if records is None:
+            ocr = get_ocr()
+            if ocr is None:
+                raise RuntimeError("no local OCR engine available (pip install rapidocr-onnxruntime)")
+            records = build_change_records(timeline, run_dir / "screen", ocr)
+            storage.save_json([r.model_dump(mode="json") for r in records], run_dir / "change_records.json")
         output = client.structured_chat(
             prompts.RECONCILER_SYSTEM,
-            build_reconciler_input(doc, records, segments_raw),
+            build_reconciler_input(doc, records, segments_raw, anchors),
             ReconcilerOutput,
             stage="reconcile",
         )
@@ -605,6 +767,7 @@ def run_pipeline(
     *,
     use_screen: bool = False,
     reconcile: bool = True,
+    workbook: Optional[Path] = None,
 ) -> RunArtifacts:
     """Phase 1+2: audio extraction -> STT -> Writer -> Reviewer -> sop_draft.md. Checker (Phase 3)
     is not implemented yet; frame_interval_s is accepted for API compatibility with the Streamlit
@@ -612,6 +775,8 @@ def run_pipeline(
     downstream consumes yet.
     """
     validate_input(video_file)  # refuse before any file is copied or any call is made
+    if workbook is not None:
+        validate_workbook(workbook)
     t0 = time.time()
     metrics = Metrics()
     client = _make_client(metrics)
@@ -665,19 +830,35 @@ def run_pipeline(
         # v3 (docs/22), opt-in: screen timeline + Align. Off by default so run_pipeline stays
         # byte-identical to v2 for every existing caller.
         timeline = None
+        records: Optional[List[ChangeRecord]] = None
+        contexts: Optional[List[ContextMap]] = None
+        investigations: Optional[List[Investigation]] = None
         if use_screen and not timing_degraded:
             with metrics.stage("screen"):
                 timeline = _screen_stage(client, run_dir, local_video)
             if timeline is not None:
+                with metrics.stage("surface"):
+                    surface = _surface_stage(client, run_dir, timeline, segments_raw)
+                records: Optional[List[ChangeRecord]] = None
+                anchors: List[SelectionAnchor] = []
+                unused: List[UnusedEvent] = []
+                if surface is not None:
+                    timeline, records, anchors, unused, contexts = surface
                 with metrics.stage("align"):
                     attached = _align_stage(client, run_dir, sop, timeline, transcript, silent_flags=not reconcile)
                 reconciled = None
                 if reconcile:
                     with metrics.stage("reconcile"):
-                        reconciled = _reconcile_stage(client, run_dir, attached, timeline, segments_raw, transcript)
+                        reconciled = _reconcile_stage(
+                            client, run_dir, attached, timeline, segments_raw, transcript,
+                            records=sent_to_reconciler(records) if records is not None else None, anchors=anchors,
+                        )
                     if reconciled is None:  # fall back to Align's counting heuristic for silent steps
                         attached = _align_stage(client, run_dir, sop, timeline, transcript, silent_flags=True)
                 sop = reconciled if reconciled is not None else attached
+                sop = sop.model_copy(update={"anchors": anchors, "screen_activity_unused": unused})
+                sop = fill_slots_from_anchors(sop, anchors, records or [])
+                investigations = _investigate_stage(client, run_dir, timeline, records, sop, transcript)
 
         sop_draft_path = sop_render.write_sop(
             sop, run_dir, video_name=video_file.name, filename="sop_draft.md"
@@ -688,11 +869,25 @@ def run_pipeline(
             sop = _run_checker(
                 client, sop, transcript, local_video, checker_frames_dir,
                 timeline=timeline, timeline_dir=run_dir / "screen", ocr=get_ocr() if timeline is not None else None,
+                # With a workbook, how a row is picked and what else reads a cell are answered from the file, not guessed from pixels.
+                skip_slots=("key", "effect") if workbook is not None else (),
             )
+
+        sop = record_video_rungs(sop)
+        if workbook is not None:
+            with metrics.stage("document"):
+                sop = _document_stage(client, run_dir, sop, workbook, records, timeline, contexts)
+
+        if investigations is not None:
+            sop = _finish_investigations(client, run_dir, investigations, sop, timeline)
 
         sop_md_path = sop_render.write_sop(sop, run_dir, video_name=video_file.name, filename="sop.md")
         sop_render.write_sop_json(sop, run_dir)
         build_spec_path = write_build_spec(sop, run_dir)
+        try:
+            write_flow(sop, run_dir)
+        except Exception as exc:  # noqa: BLE001 - the flow is a rendering of a finished document; its failure must not lose the run
+            metrics.record_failure("flow_failed", str(exc))
 
         artifacts = RunArtifacts(
             run_id=run_dir.name,
