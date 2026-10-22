@@ -1,5 +1,9 @@
 # 13 - Current Logic and Architecture (Full Snapshot)
 
+> **Correction (owner, 2026-10-22):** the matching key is the **Transaction String**, not Bill ID. A transaction string is unique because it carries a specific name and number; Bill ID is generated per bill for individual products, so it has duplicates (the same id recurs for different use cases, and across months in Monthly Actuals). Read every 'Bill ID' below as 'Transaction String' where it names the join key. The evaluation files in `processghost/evals/cases/bills_tracker/` carry the corrected key.
+
+> **Second correction (owner, 2026-10-22):** setting Status to "Paid" is **not** in the recording. It is a rule of the workbook (the total only counts rows whose Status is "Paid"), so the pipeline should raise it as a question, not state it as a step of the process. Also, the workbook open in the video is not identical to `ProcessGhost_Bills_Tracker_v4_final.xlsx`: the video has a **Total billed** row (27) and a **Total Actualized** row (28); the xlsx has one total row. The pipeline now checks that a supplied workbook matches the recording (`core/data/match.py`).
+
 > **Superseded.** This is a snapshot of the **v1** architecture (parallel intent/action token
 > streams, a keyword+time-proximity aligner, a six-rule dissonance engine) -- kept as the as-is
 > reference `docs/14-writer-reviewer-checker.md` explains the departure from, not as a description

@@ -26,9 +26,12 @@ Kinds: **LLM** calls a model; **CODE** is plain Python; **LLM + CODE** calls a m
 | 1 Writer | LLM | built | always | Fatal and the only fatal stage after transcription. No fallback: with no document there is nothing for later stages to work on. |
 | 2 Reviewer | LLM + CODE | partial | always | Non-fatal. On any failure the Writer's document ships unchanged with review_failed=True and zero flags, and sop.md shows a REVIEW FAILED banner. |
 | 0b Screen timeline | CODE | built | with `--screen` | Non-fatal. On failure the run records screen_failed and continues as v2: no silent-step flags, no event evidence. |
+| 0c Surface locators, event classes and anchors | LLM + CODE | partial | with `--screen` | Non-fatal. On failure it records surface_failed and the run continues without locators; the Reconciler builds its own records as before. |
 | 2b Align | CODE | partial | with `--screen` | Non-fatal: records align_failed and returns the document unchanged. |
 | 2c Reconciler | LLM + CODE | partial | with `--screen` | Non-fatal. On any failure, or if no OCR engine is installed, it records reconcile_failed and falls back to Align's counting heuristic. |
 | 3 Checker | LLM | partial | always | Non-fatal per flag. One failed call marks that flag check_failed and the run continues. |
+| 3c Document rung (workbook) | LLM + CODE | partial | with `--workbook` | Non-fatal. A failed stage records document_failed; a failed question is skipped with the reason on the flag. The source workbook's hash is checked again at the end. |
+| 3b Investigations and coverage | CODE | partial | with `--screen` | Non-fatal. On failure it records investigate_failed and the report carries no coverage section. |
 | 4 Triage | CODE | built | always | Cannot fail on a valid document: it is a pure function. |
 | Out Outputs | CODE | built | always | A document that fails provenance validation cannot exist, so the failing stage's own failure rules apply. |
 | All Retries, cache and limits | CODE | built | always | Each stage decides what a failure means (see the stage boxes). Only the Writer and transcription are fatal. |
@@ -175,7 +178,7 @@ Finds where a newcomer would get stuck, by omission: a step pair with no verifie
 | `MODEL_TEXT` | `gpt-4o` |
 | `LLM_TEMPERATURE` | `0.0` |
 
-**Decisions that shaped it:** D11 Keep gap detection by omission and code-checked quotes (v2); ADR-0002 Find structural gaps by omission, grounded in verified quotes; ADR-0009 Outside context enters as questions, never answers; X2 One batched model call per stage over the whole context, not many small per-item calls; X3 Scenario facts live only in evals and tests, never in prompts or pipeline code
+**Decisions that shaped it:** D11 Keep gap detection by omission and code-checked quotes (v2); ADR-0002 Find structural gaps by omission, grounded in verified quotes; ADR-0009 Outside context enters as questions, never answers; X2 One batched model call per stage over the whole context, not many small per-item calls; X3 Scenario facts live only in evals and tests, never in prompts or pipeline code; X13 Every step that moves or edits data must answer four questions: source, key, target, effect
 
 **Measured**
 
@@ -192,7 +195,7 @@ Pixels only, no model: turns the video into discrete change events with before a
 
 - Kind: CODE | Status: built | Model: none (local OpenCV; local RapidOCR for scene labels) | Runs only with `--screen`
 - Takes in: The video
-- Produces: screen_events.json: events, scenes, per-sample activity; Full-resolution before/after keyframes per event
+- Produces: screen_events.json: events, scenes, per-sample activity; Full-resolution before/after keyframes per event; A peak frame for an event that came and went (a dropdown opened and closed)
 
 **Decision tree**
 
@@ -201,11 +204,15 @@ Pixels only, no model: turns the video into discrete change events with before a
    - IF Changed fraction below SCREEN_ACTIVE_FRAC -> Treat as noise (cursor, compression); not active
    - IF At or above it -> Active sample
 3. Group active samples into events _A run ends after SCREEN_SETTLE_S of stillness; a burst after a still gap starts a new event._
-4. Keyframes: last still sample before the change, last active sample after it _Both stored at full resolution._
-5. Classify the event from the net before/after difference
-   - IF After frame is the before frame shifted vertically -> large_shift (a scroll)
+4. Optional split (SCREEN_SPLIT_ON_LOCUS_SHIFT, off by default) _After a still sample, a change that does not touch the run's earlier changes starts a new event: two quick actions in different places._
+   - IF Flag off (default) -> Changes inside the settle window stay one event
+   - IF Flag on -> Split at the jump in where the screen is changing (degrades)
+5. Keyframes: last still sample before the change, last active sample after it _Both stored at full resolution._
+6. Classify the event from the net before/after difference
+   - IF After frame is the before frame shifted vertically -> large_shift (a scroll); changes left after undoing the shift are kept as residual boxes, so an edit during a scroll is not hidden
    - IF Changed boxes span at least SCREEN_SCENE_COVERAGE of the frame AND at least SCREEN_SCENE_MIN_CHANGED of pixels changed -> scene_cut (a context switch); OCR the top and bottom strips as its label
    - IF Otherwise -> local (a cell, field or selection changed)
+   - IF Before and after are identical but the screen changed in between -> transient: kept with its most-changed frame; an interaction, not a committed change
 
 **On failure:** Non-fatal. On failure the run records screen_failed and continues as v2: no silent-step flags, no event evidence.
 
@@ -222,8 +229,10 @@ Pixels only, no model: turns the video into discrete change events with before a
 | `SCREEN_SCENE_MIN_CHANGED` | `0.03` |
 | `SCREEN_SCROLL_MIN_SHIFT_PX` | `8.0` |
 | `SCREEN_SCROLL_MIN_RESPONSE` | `0.3` |
+| `SCREEN_SPLIT_ON_LOCUS_SHIFT` | `False` |
+| `SCREEN_LOCUS_MARGIN_PX` | `24` |
 
-**Decisions that shaped it:** D1 Treat screen recordings as change points plus screenshots, not general video; D2 Build speech and screen timelines independently, then join on time; D4 Changed region is the primary locator; cursor is a hint; D5 Diff by thresholded pixels and connected components, at 2 to 5 fps; D6 One before/after keyframe pair per event (last static, first settled); D13 Screen stage and Align are non-fatal with fallback to v2 evidence; D15 Every stage works on a short rolling buffer; D17 Precompute the diff index for the whole video; call OCR and VLM only on demand; D19 Pass scene labels (OCR of tab or title per scene) as text for the surrounding window; ADR-0006 Build the screen timeline independently of the transcript
+**Decisions that shaped it:** D1 Treat screen recordings as change points plus screenshots, not general video; D2 Build speech and screen timelines independently, then join on time; D4 Changed region is the primary locator; cursor is a hint; D5 Diff by thresholded pixels and connected components, at 2 to 5 fps; D6 One before/after keyframe pair per event (last static, first settled); D13 Screen stage and Align are non-fatal with fallback to v2 evidence; D15 Every stage works on a short rolling buffer; D17 Precompute the diff index for the whole video; call OCR and VLM only on demand; D19 Pass scene labels (OCR of tab or title per scene) as text for the surrounding window; ADR-0006 Build the screen timeline independently of the transcript; ADR-0010 Changed regions are merged by proximity, never dropped by size
 
 **Measured**
 
@@ -232,7 +241,82 @@ Pixels only, no model: turns the video into discrete change events with before a
 
 **Known issues**
 
-- Thresholds were tuned on one clip. Two actions inside one second merge into one event. Web and ERP screens untested.
+- Thresholds were tuned on one clip. Two actions inside one second merge into one event unless the locus split is turned on (unmeasured). Transient, residual-box and split behaviour is tested on synthetic clips only. Web and ERP screens untested.
+
+### 0c - Surface locators, event classes and anchors
+
+Reads which application, sheet or page each frame shows from its chrome text, classifies every screen event by what changed (never by pixel size), and keeps selections as anchors tied to speech and later values by time. A cheap vision model reads only fields OCR could not.
+
+- Kind: LLM + CODE | Status: partial | Model: none, except a cheap vision model (MODEL_VISION) for the few selected-cell fields OCR cannot read, one batched call | Runs only with `--screen`
+- Takes in: Screen events and keyframes; OCR of each frame's top and bottom strips; Word-timed speech (for the cross-check only)
+- Produces: Change records with a locator before and after, what kind of change it was, and its event class; contexts.json: each distinct context once, reused when the recording returns; A speech clue per context switch; anchors.json: selections tied to speech or later values; The list of screen activity that became no step, each with its reason
+- Prompt: `READ_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
+
+**Decision tree**
+
+1. Per frame: pick the best-scoring profile (spreadsheet, web), else the generic fallback
+   - IF A profile scores at least SURFACE_MIN_CONFIDENCE -> Extract its locator: application, document, sheet or page, selected cell, formula-bar content, and the strings it came from
+   - IF None does -> Generic locator: the first title fragment only, low confidence (degrades)
+2. Compare the before and after locators of each event
+   - IF Different application, document, sheet or page -> app_switch, document_switch, sheet_switch or page_navigation
+   - IF Same surface -> same_surface_edit
+   - IF Either side is not recognised -> unknown: never a guess (degrades)
+3. Build the context map _A new context when the locator changes (or an unrecognised scene cut); the existing one is reused when the same sheet or page returns. Observations only: no hypotheses are stored._
+4. Repair unread selected-cell fields (spreadsheet only)
+   - IF The cell reference validates -> Nothing to do
+   - IF It does not -> Re-read with a CHANGED input (2x upscale, local contrast, taller strip); identical pixels would give the identical wrong answer
+   - IF Still not valid -> Queue the top strip; one batched call to the cheap vision model transcribes all queued strips. Its answer must pass the same validator, is tagged read_by=vlm, and is capped per run (degrades)
+   - IF Over the cap or the answer fails validation -> The field stays unread, never guessed (degrades)
+5. Classify each event by state change, never by pixel size
+   - IF The screen changed and came back -> transient: dropped, listed with its reason
+   - IF A scroll with nothing left after undoing the shift -> view_only: dropped, listed with its reason
+   - IF Application, document, sheet or page changed -> navigation
+   - IF Text differs before vs after at the same place, or the formula bar changed on the SAME cell -> data_change
+   - IF Only the selected cell moved -> selection: kept as an anchor
+   - IF Anything else (unreadable, mixed) -> unclear: always kept (degrades)
+6. Anchors: join selections to speech and later values by time
+   - IF A pointer word or the cell's value is spoken near it AND a later data change puts the same value elsewhere -> Confirmed anchor with a role (source)
+   - IF Only one of the two -> Candidate, shown as 'possibly <cell>', never as fact
+   - IF Neither -> Listed as unused screen activity (degrades)
+   - IF The value could belong to more than one change, or two anchors hold it -> The value signal is withheld: ambiguity yields candidates, never a guess (degrades)
+7. Speech clue (corroboration, never a gate)
+   - IF The speaker named the destination within the window (mostly after the event, because narration lags) -> found, with the lag
+   - IF Nobody named it -> No clue: a possible silent navigation, not a verdict (degrades)
+   - IF The event stayed on one surface -> Not computed
+
+**On failure:** Non-fatal. On failure it records surface_failed and the run continues without locators; the Reconciler builds its own records as before.
+
+**Settings** (current values from `core/config.py`)
+
+| Setting | Value |
+|---|---|
+| `SCREEN_TEXT_CHANGE_MIN_RATIO` | `0.9` |
+| `ANCHOR_VALUE_WINDOW_S` | `20.0` |
+| `OCR_RETRY_VARIANTS` | `3` |
+| `VLM_READ_MAX_CROPS` | `12` |
+| `SURFACE_MIN_CONFIDENCE` | `0.4` |
+| `SURFACE_SPEECH_WINDOW_BEFORE_S` | `2.0` |
+| `SURFACE_SPEECH_WINDOW_AFTER_S` | `5.0` |
+| `SURFACE_SPEECH_MIN_RATIO` | `0.6` |
+| `CONTEXT_MAX_OCR_CHARS` | `800` |
+| `SCREEN_RECORD_MAX_REGIONS` | `3` |
+| `SCREEN_REGION_MAX_CROP_FRAC` | `0.5` |
+
+**Decisions that shaped it:** ADR-0013 Surface locators are the context map; speech is corroboration, never a gate; X8 Speech is corroboration for a screen change, never a gate; X14 Screen events are classified by what changed in the application, never by how many pixels changed; X15 A selection is an anchor tied to speech and later values by time, confirmed only by two independent signals
+
+**Measured**
+
+- Real clip, no model calls: 3 contexts found, the second reused when the recording returned to it; every scored field (change kind, sheet position, sheet name, selected cell) matched the draft labels.
+- The draft labels are not independent of the detector's own readings, so this is a regression check, not proof.
+- OCR often garbles or drops the formula-bar glyph; the cell reference was recovered anyway, formula content only when legible. The third sheet showed no readable cell reference.
+
+**Known issues**
+
+- Event classes, anchors and the read fallback are unit-tested on synthetic records only; the class labels (expected_classes.json) are drafts a person has not confirmed.
+- Pointer words are English only.
+- The web profile has only synthetic tests; no web recording exists.
+- A web-hosted spreadsheet scores as web when its URL and browser name outweigh the spreadsheet signals.
+- A hosted vision model for unrecognised surfaces is deferred (it would send screen images to a provider).
 
 ### 2b - Align
 
@@ -275,7 +359,7 @@ Attaches screen events to flags. Also the fallback silent-step detector if the R
 For every step, says what changed on screen, quoting the OCR records. Anything it cannot quote is thrown away.
 
 - Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT or sarvam-105b, one call, then plain Python | Runs only with `--screen`
-- Takes in: Steps with word-timed speech; One OCR change record per screen event (chrome before/after, changed regions before/after)
+- Takes in: Steps with word-timed speech; One OCR change record per screen event (chrome before/after, changed regions before/after, and when available the surface locator, change kind and speech clue)
 - Produces: Observed changes on each step ('Observed on screen: ... [observed @t]'); Flags: unspecified questions, said-but-not-shown steps, unsupported claims, silent events
 - Prompt: `RECONCILER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
 
@@ -303,7 +387,7 @@ For every step, says what changed on screen, quoting the OCR records. Anything i
 | `SCREEN_RECORD_MAX_CHARS` | `500` |
 | `SCREEN_RECORD_CROP_PAD_PX` | `20` |
 
-**Decisions that shaped it:** D12 Silent steps enter as structural flags, reusing Checker and inserted inferred steps; D14 Work file is the source of truth for hidden logic; video gives order and intent; X1 Every step raises a 'what changed here?' question, answered from screen diffs; X2 One batched model call per stage over the whole context, not many small per-item calls; X3 Scenario facts live only in evals and tests, never in prompts or pipeline code; X4 Quote verification tolerates OCR noise: whitespace and pipes are removed before matching; X5 Reconciler flags are created already unresolvable and skip the Checker; X6 The Reconciler replaces Align's counting heuristic for silent steps; Align stays as the fallback
+**Decisions that shaped it:** D12 Silent steps enter as structural flags, reusing Checker and inserted inferred steps; D14 Work file is the source of truth for hidden logic; video gives order and intent; ADR-0010 Changed regions are merged by proximity, never dropped by size; ADR-0013 Surface locators are the context map; speech is corroboration, never a gate; X1 Every step raises a 'what changed here?' question, answered from screen diffs; X2 One batched model call per stage over the whole context, not many small per-item calls; X3 Scenario facts live only in evals and tests, never in prompts or pipeline code; X4 Quote verification tolerates OCR noise: whitespace and pipes are removed before matching; X5 Reconciler flags are created already unresolvable and skip the Checker; X6 The Reconciler replaces Align's counting heuristic for silent steps; Align stays as the fallback; X10 Observations, inferences and open questions stay separate, and a flag records why it exists; X13 Every step that moves or edits data must answer four questions: source, key, target, effect; X15 A selection is an anchor tied to speech and later values by time, confirmed only by two independent signals
 
 **Measured**
 
@@ -363,7 +447,7 @@ Resolves each open flag against the screen. Writes down what it saw before decid
 | `MAX_RUN_COST_USD` | `2.0` |
 | `MODEL_VISION` | `gpt-4o-mini` |
 
-**Decisions that shaped it:** D7 Send a full downscaled after-frame, stitched padded before/after crops of the changed regions, and OCR'd chrome text; D8 OCR first, vision only on escalation; D18 Start the Checker at the nearest event and escalate once: plus or minus 2 events, then stop; D20 Escalate deterministically: level 0 (nearest event), then once at plus or minus 2 events if `unresolvable`, then stop; no `needs_more_context` verdict; ADR-0003 The Checker observes before it decides, and "unresolvable" is a valid answer; ADR-0005 Every line is tagged as said or observed on screen; ADR-0007 The Checker's escalation is deterministic, never model-requested; X3 Scenario facts live only in evals and tests, never in prompts or pipeline code; X5 Reconciler flags are created already unresolvable and skip the Checker
+**Decisions that shaped it:** D7 Send a full downscaled after-frame, stitched padded before/after crops of the changed regions, and OCR'd chrome text; D8 OCR first, vision only on escalation; D18 Start the Checker at the nearest event and escalate once: plus or minus 2 events, then stop; D20 Escalate deterministically: level 0 (nearest event), then once at plus or minus 2 events if `unresolvable`, then stop; no `needs_more_context` verdict; ADR-0003 The Checker observes before it decides, and "unresolvable" is a valid answer; ADR-0005 Every line is tagged as said or observed on screen; ADR-0007 The Checker's escalation is deterministic, never model-requested; ADR-0010 Changed regions are merged by proximity, never dropped by size; ADR-0012 Evidence retrieval is a deterministic, budgeted library; X3 Scenario facts live only in evals and tests, never in prompts or pipeline code; X5 Reconciler flags are created already unresolvable and skip the Checker; X12 Every question climbs a ladder: video, then document, then the person who recorded the process; X17 A number in a video claim must belong to a cell that depends on what the recording changed
 
 **Measured**
 
@@ -375,6 +459,126 @@ Resolves each open flag against the screen. Writes down what it saw before decid
 
 - Resolved is too easy: several resolved answers were generic and named nothing the question asked for.
 - Structural flags can resolve into a confident false inserted step (seen in a real run).
+
+### 3c - Document rung (workbook)
+
+Checks the workbook is the one in the recording, then answers what code can (which cell was used, what reads it, how rows are matched) and lets a short model loop try the rest, read-only. A formula states a rule; the screen only shows values. Every cited cell is checked.
+
+- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT, a short loop of structured calls per flag; the profiler and the two lookup tools are plain code | Runs only with `--workbook`
+- Takes in: Open and unresolvable flags, and blocking flags the video resolved (a cross-check); The workbook, as a copy; The cell trail: which cell was selected, on which sheet, when (read from the name box); Full-frame OCR of each sheet, for the match check
+- Produces: workbook_profile.json: sheets, headers, columns (with uniqueness), formulas as written, layout quirks; cell_trail.json and workbook_match.json (match, partial, mismatch or unknown, with the reasons); Per flag: what the document rung did (answered, contradicted, candidates, no answer, skipped) with the cells it rests on; New flags for conflicts the data revealed, left for the person who recorded the process
+- Prompt: `DATA_CHECKER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
+
+**Decision tree**
+
+1. Check the workbook against the recording (no model)
+   - IF Sheet count, or the content of a selected cell, disagrees -> mismatch: the workbook is NOT used, the report says so, every routed question is recorded as skipped (stops)
+   - IF Only some words visible in the recording are not in the workbook -> partial: used, with a warning that answers are not verified against the recording (degrades)
+   - IF Everything comparable agrees -> match
+   - IF Nothing from the recording to compare -> unknown: stated in the report, never treated as a pass (degrades)
+2. Withdraw wrong attributions in the video's claims _A number in a Checker claim that equals the value of a formula cell must be the value of a cell that depends, directly or through other formulas, on a cell this recording changed. Otherwise the claim is withdrawn (its inferred clause or step removed) and the question goes back to the person. Totals are computed from the cells because the file stores no results. It rejects wrong attributions; it cannot confirm a claim._
+3. Answer from facts, no model
+   - IF Effect: what else reads the cell that was changed -> The formulas that read it, with each literal criterion checked against the real cells; a criterion no cell satisfies becomes a new blocking question
+   - IF Key: how the right row is picked -> Columns on the source sheet that carry the same text value as a cell in that row and are unique there; several candidates become a confirmation question, one is an answer
+   - IF No trail cell to start from -> Left to the model loop; nothing is guessed (degrades)
+4. Find 'one shown, many needed' (no model) _The range a formula reads that holds the changed cell, or the run of cells waiting for the same entry, says how many items the process covers; the recording changed one. Raised as a question for the person ("1 of the 8 cells in F18:F25 changed; is it repeated for the remaining 7?"), never added as a step. Needs a workbook._
+5. Profile the workbook (no model) _Sheets, the header row (not assumed to be row 1), column kinds, samples and distinct values for low-cardinality columns, formulas collapsed per column plus one-off formula cells in full, merged ranges, empty columns, blank rows, header names shared across sheets. Facts only; it says whether the file has calculated values at all._
+6. Route flags
+   - IF Not answered by the video (open, unresolvable, unchecked, check failed) -> Send, rule and key questions first
+   - IF Resolved by the video but blocking -> Send as a cross-check: the screen can show one value while the real rule differs
+   - IF Over DOCUMENT cap (DATA_MAX_ROUTED_FLAGS) -> Recorded as skipped, never dropped (degrades)
+   - IF No workbook supplied -> Stage does not run
+7. Per flag: a loop of structured calls, each a lookup or a verdict
+   - IF Lookup (read_rows or query_rows) -> Row-capped, cells truncated, formulas returned as written; a bad sheet, column or operator is an error the model can read and a wasted call
+   - IF The same lookup again -> Refused and counted as wasted (degrades)
+   - IF DATA_MAX_CALLS_PER_FLAG lookups used -> One more round that can only give a verdict
+8. Check the verdict in code
+   - IF answered or contradicted, citing cells a lookup returned -> Keep it; value and formula are copied from the lookup result, not from the model
+   - IF A cited cell was never returned -> Dropped; with none left the verdict is downgraded to no answer (degrades)
+   - IF candidates -> Kept as possible answers; the question to the person becomes a confirmation
+9. Merge into the document
+   - IF Answered -> The question is resolved (a slot is filled), citing the cells; the base text is never edited
+   - IF Contradicted, even a question the video resolved -> Becomes contradicted and blocking; the person decides (degrades)
+   - IF Candidates or no answer -> An open question becomes unresolvable: every automated source has been tried
+   - IF The data revealed a new conflict -> A new flag (origin data) for the person; never answered by the same call
+
+**On failure:** Non-fatal. A failed stage records document_failed; a failed question is skipped with the reason on the flag. The source workbook's hash is checked again at the end.
+
+**Settings** (current values from `core/config.py`)
+
+| Setting | Value |
+|---|---|
+| `DATA_ROW_CAP` | `25` |
+| `DATA_MAX_ROUTED_FLAGS` | `12` |
+| `DATA_CELL_MAX_CHARS` | `200` |
+| `DATA_DISTINCT_MAX` | `12` |
+| `DATA_MAX_CALLS_PER_FLAG` | `4` |
+| `DATA_MAX_ROUTED_FLAGS` | `12` |
+| `DATA_PASS_BUDGET_USD` | `0.3` |
+| `DATA_MAX_WORKBOOK_BYTES` | `20971520` |
+
+**Decisions that shaped it:** X12 Every question climbs a ladder: video, then document, then the person who recorded the process; X13 Every step that moves or edits data must answer four questions: source, key, target, effect; X16 Check that the workbook is the one in the recording before using it; X17 A number in a video claim must belong to a cell that depends on what the recording changed; X18 'One shown, many needed' is found from the workbook and raised as a question
+
+**Measured**
+
+- Profiler and tools run on the real workbook with no model: they return the formula that states the rule for the total, and they show that no row holds the value that formula needs.
+- First real run (before the facts, guard and match check existed): 30 model calls for 18 questions, $0.54; the key question was never answered, one answer cited the wrong month's row, and the Checker mixed the billed total with the actualized total.
+- Replaying the new logic on that saved run with no model: the guard withdraws the mixed-up claim (the number is the value of a different total), the effect question is answered from formulas with the unmet 'Paid' condition raised, and the key question becomes a confirmation between two columns with their distinct counts.
+- The match check found that the workbook differs from the one in the recording (a 'Total billed' row is missing); it also warns on OCR-garbled words, so a warning needs a person to read it.
+- Second real run (with the facts, guard and match check): 9 of 10 findings on the corrected list, no forbidden claim, $0.31. The row key became a confirmation between two columns; the paste effect and the unmet Paid condition came from formulas, not a model.
+- Afterwards, replayed on the saved run but not re-run with a model: a step with no located target uses the one cell the recording changed; only slot questions go to the model loop by default; repeat detection.
+
+**Known issues**
+
+- Workbook cell text goes to the provider (row cap and column projection limit it).
+- Formulas are never calculated here, so totals and cached values may not exist in the file.
+- Excel only; another platform needs its own reader.
+
+### 3b - Investigations and coverage
+
+Merges the three triggers into one list of stretches worth a look, and records which were actually examined.
+
+- Kind: CODE | Status: partial | Model: none | Runs only with `--screen`
+- Takes in: Screen events with contexts; Steps, flags and their attached events; The Checker's outcome per flag
+- Produces: investigations.json: time span, events, context, every trigger reason, flags, status, evidence ids; A coverage summary on the SOP and in the report
+
+**Decision tree**
+
+1. Nominate stretches from three independent triggers
+   - IF A: an event that changed application, document, sheet or page, or a scene cut -> Candidate
+   - IF B: a flag raised from what was said, with its attached events -> Candidate; kept even when no screen change was attached
+   - IF C: an event no narrated step accounts for -> Candidate, even while the speaker talks about something else
+2. Merge candidates that share an event _One investigation keeps every reason. A transcript flag with no screen change joins an overlapping investigation in the same context, else stands alone._
+3. After the Checker, set each investigation's status
+   - IF A Checker verdict exists, or a grounded observation covers its events -> examined
+   - IF Its flag was left unchecked by the flag cap -> skipped_cap (degrades)
+   - IF Its flag was left unchecked by the spend budget -> skipped_budget (degrades)
+   - IF Nothing reached it -> unexamined (degrades)
+4. Render _Section 3 of sop.md lists the spans not examined, and 'Nothing is missing' is replaced by a caveat while any remain._
+5. Retrieval library (not part of a run) _core/screen/retrieve.py: context frame, crop, comparison, episode summary, wider interval, each with a stable evidence id, cached, charged to an inspection budget, refusing when it is spent. Used by tests and the dry run; the Checker's escalation stays deterministic._
+
+**On failure:** Non-fatal. On failure it records investigate_failed and the report carries no coverage section.
+
+**Settings** (current values from `core/config.py`)
+
+| Setting | Value |
+|---|---|
+| `INSPECT_MAX_IMAGES` | `12` |
+| `INSPECT_MAX_CROPS` | `8` |
+| `INSPECT_MAX_EXPANSIONS` | `3` |
+| `INSPECT_MAX_RETRIES_PER_EPISODE` | `2` |
+
+**Decisions that shaped it:** ADR-0011 Three independent triggers feed one investigation index, with coverage accounting; ADR-0012 Evidence retrieval is a deterministic, budgeted library; X9 A cap or budget cut is reported as 'not examined', never as 'nothing there'; X11 No claim that the adaptive layer is cheaper or more accurate until it is measured against the baselines
+
+**Measured**
+
+- Real clip dry run, no model calls: 7 events became 7 investigations, 3 of them context transitions; with no transcript every event counts as unexplained.
+- Trigger B and the examined/skipped statuses have been exercised on synthetic data only.
+
+**Known issues**
+
+- Investigations are per event; a flag adds its reason to each event it is attached to. An earlier version bridged them and produced one investigation spanning a whole real recording.
+- The adaptive layer has not been compared with the fixed-frame or single-model baselines: they are written and tested but not run (they cost money).
 
 ### 4 - Triage
 
@@ -431,7 +635,7 @@ One validated document, rendered deterministically for people and for tools.
 |---|---|
 | `KEEP_RUN_MEDIA` | `True` |
 
-**Decisions that shaped it:** ADR-0005 Every line is tagged as said or observed on screen; X7 Findings are scored against the six required findings with pattern groups, forbidden claims and a false-completeness check
+**Decisions that shaped it:** ADR-0005 Every line is tagged as said or observed on screen; ADR-0011 Three independent triggers feed one investigation index, with coverage accounting; X7 Findings are scored against the six required findings with pattern groups, forbidden claims and a false-completeness check; X9 A cap or budget cut is reported as 'not examined', never as 'nothing there'; X10 Observations, inferences and open questions stay separate, and a flag records why it exists; X12 Every question climbs a ladder: video, then document, then the person who recorded the process; X16 Check that the workbook is the one in the recording before using it; X18 'One shown, many needed' is found from the workbook and raised as a question; X11 No claim that the adaptive layer is cheaper or more accurate until it is measured against the baselines
 
 **Known issues**
 
@@ -484,7 +688,7 @@ How every model call fails, retries, caches and is capped.
 
 ## All decisions
 
-36 decisions: D1 to D20 from `22-architecture-v3.md`, ADR 1 to 9 from `adr/`, and X1 to X7 settled in working sessions.
+52 decisions: D1 to D20 from `22-architecture-v3.md`, ADR 1 to 9 from `adr/`, and X1 to X7 settled in working sessions.
 
 ### D1 - Treat screen recordings as change points plus screenshots, not general video
 
@@ -718,6 +922,46 @@ How every model call fails, retries, caches and is capped.
 - Rejected: Giving the Reviewer the facts to "verify": self-report with extra steps.
 - Source: docs/adr/0009-questions-not-answers-for-outside-context.md
 
+### ADR-0010 - Changed regions are merged by proximity, never dropped by size
+
+- Status: partial (Accepted, built; unproven beyond synthetic tests)
+- Applies to: Screen timeline, Reconciler, Checker
+- Why: An event can have many changed boxes, and each consumer (the change record the Reconciler reads, the tiles the Checker sees) can show only a few. The first implementation kept the largest boxes by area. Pixel area says nothing about workflow importance: opening a dropdown changes a large area without changing business state, while one edited status cell or amount changes a few hundred pixels. Keeping the largest boxes drops exactly the small edit that matters when it sits beside a big change. When an event has more boxes than a consumer can show, the nearest boxes are merged into groups until the cap holds (`core/screen/regions.py`). Every original box ends up inside some group. A merged group that would cover most of the frame is split back when the cap still allows it. Scroll events keep only what remains after undoing the scroll (`residual_bboxes`), so an edit made during a scroll is not hidden under the "large_shift" label, and an interaction that came and went (a dropdown opened and closed) is kept as a transient event with its peak frame instead of vanishing.
+- Rejected: Rank by changed area and keep the top few (the original behaviour, and a design-document-level rejection of importance-by-magnitude). A learned importance score: no labelled data exists to calibrate one, and it would need the semantic understanding it is meant to save.
+- Source: docs/adr/0010-regions-merged-never-dropped-by-size.md
+
+### ADR-0011 - Three independent triggers feed one investigation index, with coverage accounting
+
+- Status: partial (Accepted, built; value unproven (one clip))
+- Applies to: Investigations and coverage, Outputs
+- Why: No single signal covers the recording. Transcript-driven lookup misses actions the speaker never mentions (ADR 0006). Pixel changes alone cannot say which changes matter. A screen-only view cannot tell that a spoken claim was never demonstrated. And when a flag cap or spend budget cuts the work short, the report used to print "Nothing is missing" regardless. Three independent triggers nominate stretches of the recording (`core/screen/investigate.py`): - **A, context transition:** a screen event that changed application, document, sheet or page, or a scene cut. - **B, transcript:** a flag raised from what was said, with the screen events attached to it. - **C, unexplained activity:** a screen event no narrated step accounts for, whether or not anyone was speaking about something else. Triggers that share an event are merged into one `Investigation` that keeps every reason. A transcript flag with no attached screen change is kept as its own investigation (the transcript asked and nothing on screen was located), not dropped. After the Checker runs, each investigation gets a status: examined, skipped for the flag cap, skipped for the spend budget, or unexamined. The SOP carries a `ScreenCoverage` summary and the report lists the spans not examined, replacing "Nothing is missing" with a caveat whenever coverage is incomplete.
+- Rejected: A scalar priority score combining pixel change, transcript relevance and "unexplainedness": change magnitude is a poor proxy for importance, "unexplained" cannot be known before the region is understood (circular), and a number implies precision the variables do not have. Transcript-guided selection alone (ADR 0006). Fixed-rate frames sent to a vision model (kept only as a benchmark).
+- Source: docs/adr/0011-three-triggers-one-investigation-index.md
+
+### ADR-0012 - Evidence retrieval is a deterministic, budgeted library
+
+- Status: partial (Accepted; library built and tested, not yet used by the Checker. A model-driven tool loop is an open experiment)
+- Applies to: Investigations and coverage, Checker
+- Why: The adaptive-evidence design calls for tools an agent can use to look at the recording: a full frame at a time, a crop, a before/after comparison, an episode summary, a wider interval. ADR 0007 already decided that the Checker's escalation is deterministic because a model that asks for more context tends to over-ask or claim to be done, and because that makes cost unbounded. The tools exist as plain functions (`core/screen/retrieve.py`) and nothing in them calls a model. Every artifact has a content-based id (video fingerprint, kind, time, box, padding, width), so asking for the same thing twice returns the same id with no decode and no charge, on this run or a later one. New artifacts are charged to an `InspectionBudget` (images, crops, expansions, re-inspections of one interval); when it is spent the call returns a recorded `Refusal`. Every call is reported with its latency and whether it was a cache hit. The Checker keeps its two-level deterministic escalation (ADR 0007); its evidence pack now carries the stable ids of what it showed, and they are written to the trace. Letting a model choose which tool to call is not built. It stays a documented experiment to run against the deterministic path once there is credit and more than one recording.
+- Rejected: An agent loop as the default retrieval path (ADR 0007's reasoning, and no measurement shows it helps). Re-decoding the video on every request (cost and latency for no new information). Ids derived from file paths (they would differ between runs of the same recording).
+- Source: docs/adr/0012-retrieval-as-a-deterministic-library.md
+
+### ADR-0013 - Surface locators are the context map; speech is corroboration, never a gate
+
+- Status: partial (Accepted; the spreadsheet profile matched the draft labels on one clip, the web profile is unproven)
+- Applies to: Surface locators, event classes and anchors, Reconciler
+- Why: Whether the application, sheet or page changed cannot be read from how many pixels moved: a spreadsheet sheet switch changed about 11% of pixels. Which sheet or page is showing is written in the frame's chrome (cell reference and formula bar, status bar, tab strip, URL, breadcrumb). Narration lagged the action by 4 to 5 seconds on the measured clip and some navigation was never narrated at all. A small profile per kind of surface reads the chrome text with no model and returns a `Locator` (application, document, location, title, focus, formula-bar content, the evidence strings it came from, a confidence). Profiles exist for spreadsheets and generic web pages, with a low-confidence generic fallback. Comparing the before and after locators of an event says whether it was an application, document, sheet or page change, or an edit on the same surface; when a profile is not confident the answer is "unknown", never a guess. A sheet is identified by its position ("Sheet 2 of 3") first because the name is easier for OCR to misread. The locators build a `ContextMap`: each distinct context is described once (its locator and capped OCR of the first full frame seen there) and reused when the recording returns to it. It stores observations only. A relationship such as "this column is the matching key" is a hypothesis and is not stored. Speech is a cross-check (`core/screen/speech_clue.py`): did the speaker name the place the event moved to, looking mostly forward in time because narration lags? A missing clue on a real switch is a signal (possible silent navigation), not a verdict, and a present clue never confirms the event on its own.
+- Rejected: Using the changed-pixel fraction to decide a context change (it fails on sheet switches). Using speech as a gate for treating an event as navigation (it lags and is sometimes absent). A vision model on every context switch (cost and data handling, for a question usually answerable from text). Named profiles for specific ERP products before any recording of one exists.
+- Source: docs/adr/0013-surface-locators-as-the-context-map.md
+
+### ADR-0014 - One flow from what was said and what was shown, four questions per data step, and an evidence ladder
+
+- Status: built (Accepted, built; unit-tested on synthetic data and the screen side dry-run on one real clip; the model-driven parts (slot questions, Reconciler actions and slot fills, the document loop) have not been run against a real model)
+- Applies to: cross-cutting
+- Why: The goal is a process flow with no missing steps. Four things stood in the way (checked in the code): 1. Screen findings never became steps. An unnarrated change became a flag asking what happened; observed changes were notes on spoken steps. The flow was the narration with annotations. 2. Gap finding depended on the Reviewer noticing vague wording. How rows were matched was never asked in four real runs, and no video or document can answer a question that is not raised. 3. Pixel change size says nothing about importance: a dropdown can change a third of the screen and mean nothing, a one-cell edit a fraction of a percent and be the process. 4. A question the video could not answer simply stayed open; the workbook the person worked in was never read, although rules (a formula, a column's contents) live there and the screen shows only values. - **Steps come from both sources.** An event nobody narrated that is a navigation or a data change, and whose action sentence is backed by a verbatim quote from that event's record, becomes a step marked "done on screen, not said" (`Attribution.kind = "shown"`), placed by time. Anything else stays a silent-change flag. - **Events are classified by what changed in the application** (`core/screen/classify.py`), never by pixel size: transient, view-only, navigation, data change, selection, unclear. Only positive proof drops an event; every dropped event is listed with its reason; unclear is always kept. When the selected cell moves, text that appears or vanishes because the cell's own content is shown or hidden is a selection, not an edit. - **A selection is an anchor** (`core/screen/anchors.py`), tied to speech (a pointer word or the cell's value spoken near it) and to a later data change that puts the same value elsewhere. Two independent signals confirm it; one makes it a candidate worded "possibly"; ambiguity yields candidates, never a guess. A confirmed anchor answers a copied value's source and target with no model. - **Every step that moves or edits data must answer four questions** (`core/slots.py`): source, key, target, effect. A missing answer becomes a question by omission, like a missing transition. A slot counts as said only with a verbatim transcript quote. - **Every question climbs a ladder: video, then document, then the person who recorded the process.** The video rung is the Reconciler, the anchors and the Checker. The document rung (`core/data/`) is a deterministic profiler, two read-only lookup tools and a short bounded loop of structured calls; every citation must match a cell a lookup actually returned, and the value and formula are copied from the lookup result, not from the model. The person is last for answering and final for intent: a conflict between sources (the formula says one thing, the stored values another) is never settled by the pipeline; it reaches the person as a conflict, and a question the data only narrowed to candidates reaches them as a confirmation. - **The workbook is checked against the recording first** (`core/data/match.py`): the sheet count, the content of selected cells and the visible words. A mismatch stops the workbook being used and the report says so; a partial match is used with a warning. The first real run showed why: the supplied file had one total row where the recording had two. - **Answers that code can compute are computed** (`core/data/answer.py`, `facts.py`): which cell was selected (the cell trail, read from the name box), which formulas read it with their literal criteria checked against the real cells, and which columns carry the same value on two sheets. The model loop only takes what is left. - **A number in a video claim must belong to a cell that depends on what the recording changed** (`core/data/guard.py`). The Checker read the billed total and attached it to the actualized total one row below; grounding the number in the evidence could not catch that. Totals are computed from the cells because the file stores no results. - **"One shown, many needed" is found from the workbook** (`core/data/repeat.py`): the range a formula reads that holds the changed cell (or, with no formula, the run of cells waiting for the same entry) says how many items the process covers; the recording changed one. It is raised as a question, not added as a step. - **The flow is drawn with its gaps** (`report/flow.py`): step nodes marked said / shown / both, dashed gap nodes where a piece is missing, each linked to its question. A flow with no gap nodes says "no known gaps", never "complete". - **Reading failures are retried with a changed input, then read once by a cheap vision model on the failed crop only** (`core/screen/read_fallback.py`), behind the same validator as OCR; over the per-run cap a field stays unread.
+- Rejected: A generic "needs data" tag on flags (it would be set on nearly everything); a pixel or area threshold for importance; dropping selections or turning each into a step; letting the data pass overwrite the video's answer; native model tool calling for the lookup loop (it would bypass the shared retry, cache and cost layer; the structured loop is bounded and replayable instead); freeze-and-replay machinery for the comparison (A, B and C are read off one run's per-question rung record).
+- Source: docs/adr/0014-flow-from-said-and-shown-with-an-evidence-ladder.md
+
 ### X1 - Every step raises a 'what changed here?' question, answered from screen diffs
 
 - Status: partial
@@ -774,6 +1018,94 @@ How every model call fails, retries, caches and is capped.
 - Rejected: Reading outputs by eye; a model judging its own pipeline's output.
 - Source: evals/score_findings.py
 
+### X8 - Speech is corroboration for a screen change, never a gate
+
+- Status: built
+- Applies to: Surface locators, event classes and anchors
+- Why: Narration lagged the action by 4 to 5 seconds on the measured clip and some navigation was never narrated. A clue raises confidence; no clue on a real switch is itself a signal.
+- Rejected: Treating an event as navigation only when the speaker names it; matching speech to the event's exact time.
+- Source: core/screen/speech_clue.py
+
+### X9 - A cap or budget cut is reported as 'not examined', never as 'nothing there'
+
+- Status: built
+- Applies to: Investigations and coverage, Outputs
+- Why: The report printed 'Nothing is missing' even when flags were left unchecked. Coverage is recorded per investigation and the claim is withdrawn while any remain.
+- Rejected: Silently dropping what the cap left over.
+- Source: core/screen/investigate.py
+
+### X10 - Observations, inferences and open questions stay separate, and a flag records why it exists
+
+- Status: built
+- Applies to: Reconciler, Outputs
+- Why: A screenshot can show that a value changed but not whether it was typed, pasted, recalculated or authorised. Each flag carries a finding kind (explained, observed but unexplained, unresolved requirement, potential conflict, unsupported assertion, no finding). A claim the screen does not show is 'unsupported', never 'disproved'.
+- Rejected: Treating an absent demonstration as proof the step did not happen.
+- Source: report/build_spec.py
+
+### X12 - Every question climbs a ladder: video, then document, then the person who recorded the process
+
+- Status: built
+- Applies to: Checker, Document rung (workbook), Outputs
+- Why: Their time is the scarce resource, and a question asked after the evidence is sharp (a yes/no confirmation) instead of open. The recording shows values, not rules; the document holds rules. The person is still the last word on intent, because evidence shows what is, not what was meant.
+- Rejected: Asking the person everything; letting the data pass overwrite the video's answer instead of recording a conflict.
+- Source: core/ladder.py
+
+### X13 - Every step that moves or edits data must answer four questions: source, key, target, effect
+
+- Status: built
+- Applies to: Reviewer, Reconciler, Document rung (workbook)
+- Why: Underspecified steps ('identify the bill' with no criterion) are the gap this tool exists to find. A missing answer becomes a question by omission, like a missing transition, so it does not depend on the model noticing vague wording. A slot counts as said only with a verbatim transcript quote.
+- Rejected: Hoping the Reviewer notices vague wording; a generic 'needs data' tag (it would be set on nearly everything).
+- Source: core/slots.py
+
+### X14 - Screen events are classified by what changed in the application, never by how many pixels changed
+
+- Status: built
+- Applies to: Surface locators, event classes and anchors
+- Why: A dropdown can change a third of the screen and mean nothing; one cell edit can change a fraction of a percent and be the process. Only positive proof drops an event (it came back, or it only scrolled); anything unclear is kept; every dropped event is listed with its reason.
+- Rejected: A pixel or area threshold; ranking regions by size (ADR 0010).
+- Source: core/screen/classify.py
+
+### X15 - A selection is an anchor tied to speech and later values by time, confirmed only by two independent signals
+
+- Status: built
+- Applies to: Surface locators, event classes and anchors, Reconciler
+- Why: A click on a cell may be what 'this' meant, or the source of a value pasted later. One signal makes it a candidate worded as 'possibly'; ambiguity (the value fits several changes) yields candidates, never a guess.
+- Rejected: Dropping selections; treating every selection as a step.
+- Source: core/screen/anchors.py
+
+### X16 - Check that the workbook is the one in the recording before using it
+
+- Status: built
+- Applies to: Document rung (workbook), Outputs
+- Why: A real run showed the supplied file had one total row where the recording had two, with different formulas. Answers drawn from a different file are about the wrong file, silently. The check compares the sheet count, the content of selected cells and the visible words, and a mismatch stops the workbook being used.
+- Rejected: Trusting the file name; comparing only the sheet names.
+- Source: core/data/match.py
+
+### X17 - A number in a video claim must belong to a cell that depends on what the recording changed
+
+- Status: built
+- Applies to: Document rung (workbook), Checker
+- Why: The Checker read a real number (the billed total) and attached it to the wrong total one row below. Grounding the number in the evidence cannot catch that; knowing which cell it belongs to can. Totals are computed from the cells because the file stores no results.
+- Rejected: Requiring only that a number appear in the evidence; asking a second model to review the first.
+- Source: core/data/guard.py
+
+### X18 - 'One shown, many needed' is found from the workbook and raised as a question
+
+- Status: built
+- Applies to: Document rung (workbook), Outputs
+- Why: A person records the task once, for one item; the process is for every item. Nothing said or shown tells you so, but the range a formula reads does. The extent comes from the file; whether the same process applies to every item is theirs to confirm, so it is a question, not an added step.
+- Rejected: Adding a 'repeat for each' step automatically; inferring repetition from the speech.
+- Source: core/data/repeat.py
+
+### X11 - No claim that the adaptive layer is cheaper or more accurate until it is measured against the baselines
+
+- Status: planned
+- Applies to: Investigations and coverage, Outputs
+- Why: Multi-stage design is not value by itself. A fixed-frame pipeline and a single-model call with the same evidence are written and tested but not run.
+- Rejected: Reporting estimated savings as results.
+- Source: evals/compare_methods.py
+
 ## Open questions
 
 Decisions not yet made, or problems without a fix.
@@ -800,13 +1132,13 @@ Decisions not yet made, or problems without a fix.
 
 - Applies to: Screen timeline, Reconciler
 - Why it matters: Switching sheet and selecting a cell merged into one event, so 'copy' was mapped to nothing.
-- Options: Split on a changed-region jump; Shorten the settle window; Leave merged and let the Reconciler read both
+- Options: Split on a changed-region jump (built behind SCREEN_SPLIT_ON_LOCUS_SHIFT, off by default, unmeasured); Shorten the settle window; Leave merged and let the Reconciler read both
 
 ### Q5 - How are web and ERP surfaces handled?
 
-- Applies to: Screen timeline, Reconciler, Checker
-- Why it matters: Record extraction reads spreadsheet chrome (cell reference, formula bar, tabs). A web page has a URL, breadcrumb and field labels, and context switches are not 11% pixel changes there. Nothing has been tested.
-- Options: A per-surface chrome profile; Detect chrome regions from what never changes between events; Record a web walkthrough as a second eval case first
+- Applies to: Screen timeline, Surface locators, event classes and anchors, Reconciler, Checker
+- Why it matters: A generic web profile (URL, title, breadcrumb) now exists but has only synthetic tests. No web recording exists, and a web page change is not a large pixel change.
+- Options: Record a web walkthrough as a second eval case first; Detect chrome regions from what never changes between events; A hosted vision reading for unrecognised surfaces (sends screen images to a provider)
 
 ### Q6 - Who confirms the event labels?
 
@@ -831,3 +1163,45 @@ Decisions not yet made, or problems without a fix.
 - Applies to: Input and guards, Retries, cache and limits
 - Why it matters: Runs and the cache are unencrypted; nothing is redacted before it is sent to the provider.
 - Options: Encrypted volume and scheduled cleanup (documented); Redaction before sending; Local models only
+
+### Q10 - What combination of differences keeps tiny cell changes without flooding the index with cursor and scroll activity?
+
+- Applies to: Screen timeline
+- Why it matters: Thresholds were tuned on one clip. Region merging means a small edit is no longer dropped from a record, but whether it is detected at all still depends on SCREEN_ACTIVE_FRAC and the box floor.
+- Options: Region-level thresholds; A structural-similarity score per region; Per-recording calibration from the first seconds
+
+### Q11 - When does a context need another full frame?
+
+- Applies to: Surface locators, event classes and anchors
+- Why it matters: A context is described once from the first frame seen. If the sheet is edited a lot, or the application changes a title without changing the surface, the stored labels go stale.
+- Options: Refresh on a changed locator only (current); Refresh after N events in a context; Refresh when the labels' OCR differs
+
+### Q12 - How far should a transcript-triggered window expand when speech and action are seconds apart?
+
+- Applies to: Investigations and coverage, Checker
+- Why it matters: Narration lagged by 4 to 5 seconds on one clip. The speech-clue window and Align's lead are separate fixed numbers, neither validated on a second recording.
+- Options: One shared, measured lag; Estimate the lag per recording from context switches that were named aloud
+
+### Q13 - Would a model that chooses which retrieval tool to call beat the deterministic escalation?
+
+- Applies to: Checker, Investigations and coverage
+- Why it matters: ADR 0007 rejected model-requested context for over-asking and unbounded cost, with no measurement either way. The retrieval library makes the experiment cheap to set up.
+- Options: Keep deterministic escalation; Run the tool-loop experiment against it under an equal budget
+
+### Q15 - Does the document rung settle the questions the screen cannot (how rows are matched, what a total requires)?
+
+- Applies to: Document rung (workbook)
+- Why it matters: The profiler and tools work on the real workbook, but the model loop has only run against a fake client. Whether it cites the right formula cell and stops at 'candidates' where the data only suggests a rule is unmeasured.
+- Options: Run it on the real model against the labelled workbook questions; Add a second workbook with a different layout first; Compare with asking the person directly
+
+### Q16 - Are the event classes right on recordings other than the one they were built on?
+
+- Applies to: Surface locators, event classes and anchors
+- Why it matters: Thresholds and the selection-versus-edit rule were set from one clip, and the labels are drafts a person has not confirmed. Web and ERP surfaces have never been seen.
+- Options: Label two more clips by hand and score the classes; Calibrate thresholds per recording; Add a web profile test recording
+
+### Q14 - Does the adaptive pipeline beat a single multimodal call given comparable evidence?
+
+- Applies to: Investigations and coverage, Outputs
+- Why it matters: Neither the fixed-frame pipeline nor the single-model baseline has been run against the adaptive one. Until it is, there is no basis for saying the extra stages earn their cost.
+- Options: Run evals/compare_methods.py with credit, on the existing clip plus two new clips with predefined truth

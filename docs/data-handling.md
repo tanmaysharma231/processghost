@@ -14,7 +14,8 @@ pipeline on a real client recording.
 | Screen timeline | `runs/<run_id>/screen/` | Full-resolution before/after keyframes of every change |
 | Evidence images | `runs/<run_id>/checker_frames/events/` | Downscaled full frames and crops sent to the model |
 | Outputs | `runs/<run_id>/sop.md`, `sop.json`, `build_spec.json`, `run.json` | The transcript, steps, and anything the models quoted from the screen |
-| Call trace | `runs/<run_id>/trace.jsonl` | Every model answer verbatim, including text read from the screen |
+| Call trace | `runs/<run_id>/trace.jsonl` | Every model answer verbatim, including text read from the screen and every workbook lookup |
+| Workbook copy and profile | `runs/<run_id>/workbook/`, `workbook_profile.json` | A copy of the workbook you supplied, and a profile of it (with `--workbook` only) |
 | Manifest | `runs/<run_id>/manifest.json` | Code version, prompt hashes, settings, input hash. No keys. |
 | Model-call cache | `processghost/cache/` | Model answers and the transcript, keyed by hash. **Unencrypted.** |
 | Run summary | `processghost/logs/run-metrics.csv` | One line per run: name, tokens, cost |
@@ -30,7 +31,21 @@ Sent to the model provider you configure (OpenAI by default, Sarvam optionally):
   frame and crops of what changed) only on the second, escalation call, and only with the OpenAI
   provider. With Sarvam no images are sent.
 
+- with `--workbook`: lookups into the workbook you supply. Only what a lookup returns is sent (at most
+  `DATA_ROW_CAP` rows per call, each cell cut to `DATA_CELL_MAX_CHARS`, and only the columns asked for),
+  plus a profile of the workbook (sheet names, headers, a few sample values per column, every distinct
+  value of low-cardinality columns, formulas as written). **Cell text is data from your file and can be
+  client data.** The workbook is opened as a copy inside the run directory (`runs/<run_id>/workbook/`);
+  the original is never written to and its hash is checked at the end of the run.
+- when OCR cannot read a selected-cell field after re-reading it (`core/screen/read_fallback.py`): a small
+  cropped strip of the top of the window (name box and formula bar), at most `VLM_READ_MAX_CROPS` per
+  run, to the vision model configured as `MODEL_VISION`, in one batched call.
+
 Not sent anywhere: the screen timeline computation (OpenCV) and the OCR engine (RapidOCR) run locally.
+So do the surface locators, the context map, the investigation index, the retrieval library and the
+dry-run script (`docs/26-adaptive-visual-evidence.md`): they read pixels and OCR text on this machine and
+make no provider call. A hosted vision reading for unrecognised screens was considered and is NOT built;
+if it is added it will send downscaled screen images to the provider and this page must say so first.
 
 Check your provider's data-retention and training terms for the account you use. Free tiers in
 particular may use requests for training; do not use them for client recordings.

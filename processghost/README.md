@@ -58,7 +58,13 @@ verified test case this pipeline is validated against (not optimized for) --
    ```bash
    streamlit run app/streamlit_app.py
    ```
-4. Upload an mp4 with narration, run, and download `sop.md` (the four-section document: the
+4. Or run from the command line (the screen and workbook stages are optional):
+   ```bash
+   python -m scripts.run_pipeline ../data/english_hackathon_test.mp4 --provider openai --screen --workbook ../data/ProcessGhost_Bills_Tracker_v4_final.xlsx
+   ```
+   `--screen` adds the screen timeline, cell trail, Reconciler and shown steps; `--workbook` adds the read-only workbook step
+   (see `docs/22-architecture-v3.md`). Score a finished run with `python -m evals.score_findings runs/<run_id>`.
+5. Upload an mp4 with narration, run, and download `sop.md` (the four-section document: the
    workflow as spoken, what the pipeline assumed, what's missing, and the questions to ask) and
    `build_spec.json` (the escalation queue).
 
@@ -69,6 +75,9 @@ processghost/
   core/
     io/                       # video/audio extraction, storage, image encoding
     llm/                      # LLMClient (OpenAI/LangChain) + SarvamClient + prompts + parsing
+    screen/                   # screen timeline, surfaces, classes, anchors, cell trail, Reconciler, investigations
+    data/                     # workbook profile, read-only tools, facts, answers, claim guard, match check, repeat detection
+    slots.py, ladder.py       # the four slots of a data step; the video -> document -> person ladder
     models/sop.py             # the v2 data contract: SOPStep, Flag, StepTransition, Resolution,
                                #   SOPDocument (provenance-validated), and the LLM-facing
                                #   WriterOutput/ReviewerOutput/CheckerOutput schemas
@@ -77,6 +86,7 @@ processghost/
     config.py                  # LLM_PROVIDER, pricing, Checker frame/cap tuning
   report/
     sop_render.py              # deterministic sop.md renderer (four sections, pure function)
+    flow.py                    # flow.json and flow.md: the process flow with its gaps drawn in
     build_spec.py              # deterministic build_spec.json renderer + triage_flag
   runs/                        # per-run artifacts (video, frames, sop.json, sop.md,
                                 #   build_spec.json, trace.jsonl)

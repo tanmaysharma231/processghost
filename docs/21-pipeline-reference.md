@@ -9,6 +9,8 @@ Design rationale lives elsewhere: `14-writer-reviewer-checker.md` (why this chai
 `15-provenance-and-doc-format.md` (the attribution grammar), `16-prompt-guide.md` (prompt lessons),
 `18-known-gaps-v2.md` (defects). This doc is the "what runs, in what order" view.
 
+> **Since this reference was written (2026-10-22):** the run has optional stages for the screen (`--screen`) and for a workbook (`--workbook`), described in `22-architecture-v3.md` and drawn in `pipeline-explorer.html`. The Reviewer prompt now also classifies step kinds and asks for the four slots; the Reconciler prompt asks for actions on unnarrated events, slot fills and anchors; `READ_SYSTEM` and `DATA_CHECKER_SYSTEM` are new. The appendix below predates those changes: `core/llm/prompts.py` and the explorer carry the current text.
+
 ## The run at a glance
 
 ```

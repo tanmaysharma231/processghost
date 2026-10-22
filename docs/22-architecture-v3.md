@@ -363,6 +363,37 @@ The biggest risk is unreliable event detection on compressed meeting recordings,
 - How should per-tool overlays (Teams, Zoom, Meet thumbnails and banners) be masked: configured per tool, or detected from regions that never relate to the shared screen?
 - Two quick actions inside the settle window merge into one event (select-and-copy right after a sheet switch). Is the Checker's tile layout enough to describe both, or should events split on a changed-region jump?
 
+## Adaptive evidence additions (docs/26)
+
+Added after v3, all local and none of them a new model call:
+
+- **Region selection** (ADR 0010): changed boxes are merged by proximity, not ranked by area, so a small
+  edit beside a large change is not dropped from change records or Checker tiles. Scroll events keep the
+  changes left after undoing the scroll; an interaction that came and went is kept as a transient event.
+- **Surface locators and context map** (ADR 0013): the chrome text of each frame is read into a locator
+  (application, document, sheet or page, selected cell). Comparing the before and after locators says what
+  kind of change an event was. Each context is described once and reused when the recording returns to it.
+- **Investigation index** (ADR 0011): three triggers (context transition, transcript, unexplained activity)
+  merged into investigations with every reason attached; after the Checker each one is marked examined,
+  skipped (flag cap or budget) or unexamined, and the report lists what was not examined.
+- **Retrieval library** (ADR 0012): context frame, crop, comparison, episode and wider interval, with stable
+  ids, a cache and an inspection budget. The Checker's escalation stays deterministic (ADR 0007).
+- **Finding kinds**: each flag maps deterministically to explained / observed-unexplained / unresolved
+  requirement / potential conflict / unsupported assertion / no finding. A claim the screen does not show
+  is unsupported, never disproved.
+
+Run order with `--screen`: screen timeline, surface (records, locators, contexts, speech clues), Align,
+Reconciler, Checker, investigation status. Status and measurements: `26-adaptive-visual-evidence.md` Part V.
+
+## Flow, slots and ladder additions (ADR 0014)
+
+- **Screen side (all local):** each event is classified by what changed in the application, not by pixel size (`core/screen/classify.py`); a selection is kept as an anchor tied to speech and later values by time (`anchors.py`); an unread selected-cell field is re-read with a changed input and then, once, by the cheap vision model (`read_fallback.py`); the cell trail lists which cell was selected where and when (`cell_trail.py`). An unnarrated navigation or data change whose action is quoted from its record becomes a "shown" step.
+- **Slots:** a step that moves or edits data must answer source, key, target, effect (`core/slots.py`). A missing answer becomes a question by omission; a slot counts as said only with a verbatim transcript quote.
+- **Ladder:** video, then document, then the person who recorded the process (`core/ladder.py`, `core/data/`). With `--workbook`: the workbook is checked against the recording first (`match.py`); wrong attributions in the video's claims are withdrawn (`guard.py`); key and effect questions are answered from the file with no model (`facts.py`, `answer.py`); "one shown, many needed" is raised from the file (`repeat.py`); a short bounded model loop takes only what is left.
+- **Outputs added:** `flow.json` and `flow.md` (the flow with its gaps), `cell_trail.json`, `anchors.json`, `workbook_profile.json`, `workbook_match.json`, `sme_questions` in `build_spec.json`.
+
+Run order with `--screen --workbook`: screen, surface (records, repairs, classes, anchors, contexts), Align, Reconciler, Checker (key and effect questions left to the workbook), document rung, investigation status.
+
 ## Roadmap
 
 Build in increments, each with an exit check before the next starts. Labels and scoring come before any change to the Checker.

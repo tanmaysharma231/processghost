@@ -20,6 +20,11 @@ What ProcessGhost does not do, and which of those limits are deliberate choices 
 
 ## Known gaps (not choices)
 
+- **The workbook must be the one in the recording.** A different version silently gives answers about the wrong file, so the pipeline compares the sheet count, selected-cell contents and visible words, refuses a clear mismatch and warns on a partial one. The comparison is only as good as the OCR (it warns on garbled words too).
+- **A formula's computed value is not in the file** when it was never calculated by a spreadsheet application; totals are computed from the cells for a few functions only (SUM, SUMIF, SUMIFS, COUNTIF, COUNTIFS).
+- **"One shown, many needed" needs a workbook.** From the screen alone the extent cannot be seen.
+- **Pointer words are English only**, and event classes and anchors were tuned on one clip with draft labels.
+
 - **Evidence base is one clip.** A 24-second spreadsheet walkthrough. Every threshold and every
   number in the docs describes that clip.
 - **Web and ERP screens are untested.** Context-switch detection is designed for page-level change
