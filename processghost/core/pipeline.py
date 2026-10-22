@@ -77,6 +77,7 @@ from core.data.apply import apply_outcome, attach_attempt, skipped_attempt
 from core.data.checker import check_flag_with_data
 from core.data.guard import guard_claims
 from core.data.match import check_match, frame_texts
+from core.data.params import add_parameters
 from core.data.repeat import add_repeat_questions
 from core.data.profile import profile_workbook
 from core.data.tools import WorkbookTools
@@ -681,6 +682,7 @@ def _document_stage(
         # them and the columns that carry the same value on two sheets are facts in the file.
         for flag_id, outcome in deterministic_outcomes(doc, trail, profile, tools).items():
             doc = apply_outcome(doc, flag_id, outcome)
+        doc = add_parameters(doc, trail, profile, tools)  # which values probably change each run, and what would break next time
         doc = add_repeat_questions(doc, trail, tools)  # the recording shows one item; the workbook shows how many the process covers
         observed = [{"sheet": t.sheet, "cell": t.cell, "content": t.content} for t in trail]
         routed, overflow = route_to_document(doc, True)

@@ -330,6 +330,49 @@
       "title": "Flag",
       "type": "object"
     },
+    "FlowNote": {
+      "description": "Something to know about reusing the flow: a value typed into a formula, a value carried in a sheet name, or what\nproduces a result. Facts from the workbook with the cells they rest on; the real names and values are kept.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "hardcoded_value",
+            "value_in_sheet_name",
+            "result_mechanism"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step Id"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/DataCitation"
+          },
+          "title": "Citations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "title": "FlowNote",
+      "type": "object"
+    },
     "FrameDescription": {
       "description": "Slimmed ActionToken -- one frame's worth of Checker evidence.",
       "properties": {
@@ -463,6 +506,42 @@
         "text"
       ],
       "title": "ObservedChange",
+      "type": "object"
+    },
+    "Parameter": {
+      "description": "A value from this recording that probably changes from run to run, decided from the workbook (core/data/params.py).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "sheet": {
+          "title": "Sheet",
+          "type": "string"
+        },
+        "column": {
+          "title": "Column",
+          "type": "string"
+        },
+        "example": {
+          "title": "Example",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "sheet",
+        "column",
+        "example"
+      ],
+      "title": "Parameter",
       "type": "object"
     },
     "Resolution": {
@@ -666,6 +745,7 @@
                 "move_data",
                 "edit",
                 "check",
+                "result",
                 "other"
               ],
               "type": "string"
@@ -1060,6 +1140,20 @@
         "$ref": "#/$defs/UnusedEvent"
       },
       "title": "Screen Activity Unused",
+      "type": "array"
+    },
+    "parameters": {
+      "items": {
+        "$ref": "#/$defs/Parameter"
+      },
+      "title": "Parameters",
+      "type": "array"
+    },
+    "flow_notes": {
+      "items": {
+        "$ref": "#/$defs/FlowNote"
+      },
+      "title": "Flow Notes",
       "type": "array"
     },
     "workbook_match": {

@@ -16,7 +16,7 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
-from core.models.data import DataCitation, RungAttempt, WorkbookMatch
+from core.models.data import DataCitation, FlowNote, Parameter, RungAttempt, WorkbookMatch
 from core.models.screen import SelectionAnchor, UnusedEvent
 from core.models.tokens import TranscriptSegment
 
@@ -28,7 +28,7 @@ Verdict = Literal["resolved", "contradicted", "unresolvable"]
 Origin = Literal["reviewer", "coverage", "screen", "reconcile", "data"]
 CheckerTier = Literal["ocr", "vision", "fallback_frames"]
 SlotName = Literal["source", "key", "target", "effect"]
-StepKind = Literal["navigate", "move_data", "edit", "check", "other"]
+StepKind = Literal["navigate", "move_data", "edit", "check", "result", "other"]
 SlotBy = Literal["said", "shown", "document", "sme"]
 FindingKind = Literal[
     "explained_action",  # the open question was answered from evidence
@@ -285,6 +285,8 @@ class SOPDocument(BaseModel):
     # Screen-side additions (docs/26 flow plan): both default empty so older sop.json files load.
     anchors: List[SelectionAnchor] = Field(default_factory=list)  # selections kept as pointers for speech and later values
     screen_activity_unused: List[UnusedEvent] = Field(default_factory=list)  # events that became no step, with the reason
+    parameters: List[Parameter] = Field(default_factory=list)  # values that probably change each run, from the workbook
+    flow_notes: List[FlowNote] = Field(default_factory=list)  # what to know before reusing the flow (hard-coded values, names, mechanisms)
     workbook_match: Optional[WorkbookMatch] = None  # whether the workbook supplied agrees with the recording (with --workbook)
 
     @computed_field  # type: ignore[misc]

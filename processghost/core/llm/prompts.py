@@ -162,7 +162,8 @@ the fourth.
 <step_slots>
 Also classify each step by what it does ("kind"): "navigate" (go to a place: a sheet, page, file), \
 "move_data" (take a value from one place and put it in another), "edit" (change a value in place), \
-"check" (look at something to confirm it), or "other". For a "move_data" step report four slots, for an \
+"check" (look at something to confirm it), "result" (something that happens by itself as a consequence \
+of an earlier action, such as a total updating automatically: nobody performs it), or "other". For a "move_data" step report four slots, for an \
 "edit" step the last three: "source" (where the value comes from), "key" (how the right row or item is \
 picked), "target" (where exactly the value goes), "effect" (what else reads the value that is changed: \
 formulas, totals, links). A slot is answered only if the speaker actually stated it: give its "value" and \

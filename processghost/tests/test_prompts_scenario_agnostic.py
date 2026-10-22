@@ -50,9 +50,13 @@ def test_prompt_names_cover_the_known_v2_trio():
     assert {"WRITER_SYSTEM", "REVIEWER_SYSTEM", "CHECKER_SYSTEM"} <= set(_prompt_names())
 
 
+# Spreadsheet function names are vocabulary of the formula evaluator, not scenario facts.
+ALLOWED = {"core/data/facts.py": ("SUMIFS",)}
+
 GENERIC_MODULES = [
     "core/slots.py", "core/ladder.py", "core/screen/classify.py", "core/screen/anchors.py", "core/screen/slot_fills.py",
     "core/screen/read_fallback.py", "core/data/profile.py", "core/data/tools.py", "core/data/checker.py", "core/data/apply.py",
+    "core/data/params.py", "core/data/repeat.py", "core/data/guard.py", "core/data/match.py", "core/data/facts.py", "core/data/answer.py", "core/screen/cell_trail.py",
 ]
 
 
@@ -63,5 +67,5 @@ def test_generic_modules_name_no_scenario_value():
     offenders = []
     for rel in GENERIC_MODULES:
         text = (root / rel).read_text(encoding="utf-8").lower()
-        offenders += [f"{rel}: {s}" for s in SCENARIO_STRINGS if s.lower() in text]
+        offenders += [f"{rel}: {s}" for s in SCENARIO_STRINGS if s.lower() in text and s not in ALLOWED.get(rel, ())]
     assert not offenders, offenders

@@ -1,6 +1,6 @@
 {
   "video": "../../../../data/english_hackathon_test.mp4",
-  "note": "DRAFT event-class labels, one per label in expected_events.json (L1..L7, same times). Written from the event descriptions there and the keyframes seen during development, so they are NOT independent of the detector. A human must watch the video, correct them, and set confirmed=true. Classes: transient, view_only, selection, navigation, data_change, unclear. The hard rule scored here is that no data_change label is ever classified as a dropped class (transient, view_only).",
+  "note": "DRAFT event-class labels, one per label in expected_events.json (L1..L7, same times). Written from the event descriptions there and the keyframes seen during development, so they are NOT independent of the detector. All seven labels confirmed by the owner on 2026-10-22 (L1, L3, L4 with corrections to my descriptions). Classes: transient, view_only, selection, navigation, data_change, unclear. The hard rule scored here is that no data_change label is ever classified as a dropped class (transient, view_only).",
   "events": [
     {
       "label_id": "L1",
@@ -15,7 +15,8 @@
       "t_start": 4.2,
       "t_end": 5.4,
       "class": "navigation",
-      "confirmed": false
+      "confirmed": true,
+      "note": "Owner: matches the video."
     },
     {
       "label_id": "L3",
@@ -38,21 +39,24 @@
       "t_start": 9.6,
       "t_end": 10.2,
       "class": "navigation",
-      "confirmed": false
+      "confirmed": true,
+      "note": "Owner: matches the video. Switch to the transactions sheet; the copy of the value happens inside the same event. Kept as ONE navigation event: the copy is a sub-action of taking the value (step S5), not a separate state change the timeline can see."
     },
     {
       "label_id": "L6",
       "t_start": 15.9,
       "t_end": 16.5,
       "class": "navigation",
-      "confirmed": false
+      "confirmed": true,
+      "note": "Owner: matches the video."
     },
     {
       "label_id": "L7",
       "t_start": 18.2,
       "t_end": 18.5,
       "class": "data_change",
-      "confirmed": false
+      "confirmed": true,
+      "note": "Owner: matches the video. The paste; the Total Actualized row updates."
     }
   ]
 }

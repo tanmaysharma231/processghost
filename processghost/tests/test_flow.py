@@ -48,7 +48,7 @@ def test_open_slots_hang_off_their_step_and_answered_ones_are_not_drawn():
     slot_gaps = {n["slot"] for n in _nodes(flow, "gap") if n["slot"]}
     assert slot_gaps == {"source", "key", "effect"}
     step = next(n for n in _nodes(flow, "step") if n["id"] == "step-02")
-    assert step["slots"] == {"target": {"value": "F18", "by": "shown"}} and step["open_slots"] == ["source", "key", "effect"]
+    assert step["slots"] == {"target": {"value": "F18", "by": "shown", "template": "F18"}} and step["open_slots"] == ["source", "key", "effect"]
     assert {(e["from"], e["label"]) for e in flow["edges"] if e["to"].startswith("gap-") and e["from"] == "step-02"} >= {("step-02", "key")}
 
 

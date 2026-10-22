@@ -211,6 +211,10 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
                 f"- Observed on screen: {oc.text} `[observed @{fmt_ts(oc.t_s)}, {', '.join(oc.event_ids)}]`"
             )
         lines.extend(_slot_lines(step, flag_of_slot.get(step.step_id, {})))
+        if step.kind == "result":
+            evidence = "shown on screen" if step.observed_changes else "claimed, not shown on screen"
+            lines.append(f"- This is a result, not an action: nobody performs it ({evidence}).")
+            lines.extend(f"- {n.text}" for n in doc.flow_notes if n.kind == "result_mechanism" and n.step_id == step.step_id)
         lines.append("")
 
     if doc.transitions or any(f.family == "structural" for f in doc.flags) or any(_is_shown_only(s) for s in ordered_steps):
@@ -308,6 +312,15 @@ def render_sop_md(doc: SOPDocument, *, video_name: str) -> str:
         lines.append("")
         for flag in not_checked:
             lines.append(f"- **{flag.flag_id}** ({flag.question}) -- {_NOT_CHECKED_LABELS[flag.status]}")
+        lines.append("")
+
+    reuse = [n for n in doc.flow_notes if n.kind != "result_mechanism"]
+    if doc.parameters or reuse:
+        lines.append("### Reusing this flow -- values that probably change, and what would break")
+        lines.append("")
+        for prm in doc.parameters:
+            lines.append(f"- **{prm.name}** is '{prm.example}' in this recording. " + " ".join(prm.evidence))
+        lines.extend(f"- {n.text}" for n in reuse)
         lines.append("")
 
     coverage = doc.screen_coverage

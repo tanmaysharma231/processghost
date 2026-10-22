@@ -74,6 +74,26 @@ class FormulaCell(BaseModel):
     references: List[str] = Field(default_factory=list)  # ranges the formula reads, as written
 
 
+class Parameter(BaseModel):
+    """A value from this recording that probably changes from run to run, decided from the workbook (core/data/params.py)."""
+
+    name: str  # the column header it sits under
+    sheet: str
+    column: str
+    example: str  # the value in this recording
+    evidence: List[str] = Field(default_factory=list)
+
+
+class FlowNote(BaseModel):
+    """Something to know about reusing the flow: a value typed into a formula, a value carried in a sheet name, or what
+    produces a result. Facts from the workbook with the cells they rest on; the real names and values are kept."""
+
+    kind: Literal["hardcoded_value", "value_in_sheet_name", "result_mechanism"]
+    text: str
+    step_id: Optional[str] = None
+    citations: List[DataCitation] = Field(default_factory=list)
+
+
 class MatchIssue(BaseModel):
     kind: Literal["sheet_count", "cell_content", "text_missing"]
     detail: str

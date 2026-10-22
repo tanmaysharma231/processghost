@@ -114,17 +114,18 @@
     {
       "id": "S8",
       "order": 8,
-      "name": "Check that the period's total row now includes the row",
+      "name": "Result, not an action: the period's total updates automatically once the amount is pasted",
       "said": "claimed",
-      "shown": "partly",
-      "confirmed": false,
-      "note": "Spoken as 'the total will get updated automatically'. That only holds if S7 was done. The total is a per-period formula, so which row it sits on changes with the period.",
+      "shown": true,
+      "confirmed": true,
+      "note": "Owner: it changes automatically, so there is nothing to do. The flow should show it as an expected result (said, and shown by the Total Actualized row changing), not as a step someone performs.",
       "groups": [
         [
           "total",
           "updat|includ|sum"
         ]
-      ]
+      ],
+      "type": "consequence"
     },
     {
       "id": "S9",
