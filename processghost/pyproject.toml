@@ -1,41 +1,5 @@
-[tool.poetry]
-name = "processghost"
-version = "0.1.0"
-description = "ProcessGhost: gap checker and SOP recovery for narrated walkthroughs"
-authors = ["AI Engineer Hackathon"]
-readme = "README.md"
-package-mode = false
-
-[tool.poetry.dependencies]
-python = "^3.11"
-openai = ">=1.13.0"
-streamlit = ">=1.31.0"
-pydantic = ">=2.5.0"
-langchain = ">=1.1.0"
-langchain-openai = ">=1.1.0"
-langchain-anthropic = ">=1.3.1"
-anthropic = ">=0.76.0"
-langchain-core = ">=1.2.7"
-openpyxl = ">=3.1.0"
-pillow = ">=10.0.0"
-numpy = ">=1.26.0"
-opencv-python = ">=4.8.0"
-tqdm = ">=4.66.0"
-python-dotenv = ">=1.0.0"
-tenacity = ">=8.2.0"
-matplotlib = ">=3.7.0"
-rapidocr-onnxruntime = ">=1.3.0"
-httpx = ">=0.25.0"
-
-[tool.poetry.group.dev.dependencies]
-pytest = ">=7.4.0"
-black = ">=23.11.0"
-ruff = ">=0.1.7"
-
-[build-system]
-requires = ["poetry-core>=1.7.0"]
-build-backend = "poetry.core.masonry.api"
-
+# Dependencies live in requirements.txt (pinned versions in constraints.txt). This file only
+# configures pytest.
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

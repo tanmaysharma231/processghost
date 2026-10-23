@@ -7,7 +7,6 @@ core/pipeline.py are responsible for catching and falling back to the heuristic 
 """
 from __future__ import annotations
 
-import json
 from typing import List
 
 from core.slots import add_slot_flags, applicable_slots

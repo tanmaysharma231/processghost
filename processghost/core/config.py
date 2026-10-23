@@ -2,7 +2,12 @@
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parents[1]
+# API keys: read from the environment, or from a git-ignored processghost/.env (see .env.example).
+# A variable already set in the environment wins over the file.
+load_dotenv(ROOT / ".env")
 RUNS_DIR = ROOT / "runs"
 LOGS_DIR = ROOT / "logs"
 

@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Set
 
 import cv2
 
-from core.data.facts import norm
+from core.text_grounding import norm_value
 from core.data.tools import WorkbookTools
 from core.models.data import MatchIssue, WorkbookMatch
 from core.models.screen import ChangeRecord, ContextMap, ScreenTimeline
@@ -99,7 +99,7 @@ def check_match(records: List[ChangeRecord], trail: List[TrailCell], texts: Dict
         if cell is None or cell.value is None:
             continue
         checked += 1
-        if norm(t.content) != norm(cell.value):
+        if norm_value(t.content) != norm_value(cell.value):
             issues.append(MatchIssue(kind="cell_content", fatal=True, detail="%s!%s shows '%s' in the recording but '%s' in the workbook" % (t.sheet, t.cell, t.content[:40], str(cell.value)[:40])))
 
     words = found = 0

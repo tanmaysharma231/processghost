@@ -6,7 +6,7 @@ from typing import List, Optional
 from core.models.screen import ChangeRecord, Locator, RegionChange
 from core.screen.anchors import build_anchors, describe
 from core.screen.classify import (
-    classify_record, classify_records, norm_text, sent_to_reconciler, text_changed, unused_from_classes,
+    classify_record, classify_records, norm_value, sent_to_reconciler, text_changed, unused_from_classes,
 )
 from evals.score_classes import score_classes
 
@@ -35,7 +35,7 @@ def _words(*pairs) -> List[dict]:
 
 
 def test_thousands_separators_and_spacing_are_not_a_change():
-    assert norm_text("45,000") == norm_text("45000")
+    assert norm_value("45,000") == norm_value("45000")
     assert not text_changed("AMZN WEB SVCS", "AMZNWEBSVCS")
     assert not text_changed("Total Actualized 45000", "Total Actualized 45,000")
 

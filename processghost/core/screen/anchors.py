@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 
 from core import config
 from core.models.screen import ChangeRecord, SelectionAnchor, UnusedEvent
-from core.screen.classify import norm_text
+from core.text_grounding import norm_value
 from core.screen.speech_clue import timed_words
 
 _MAX_VALUE_CHARS = 24  # a long formula is not a value someone speaks or pastes
@@ -43,7 +43,7 @@ def _is_anchor_source(rec: ChangeRecord) -> bool:
 
 
 def _value_key(content: str) -> str:
-    key = norm_text(content)
+    key = norm_value(content)
     return key if 2 <= len(key) <= _MAX_VALUE_CHARS else ""
 
 
@@ -69,7 +69,7 @@ def _value_targets(rec: ChangeRecord, key: str, records: List[ChangeRecord]) -> 
             continue
         if not (rec.t_end <= other.t_start <= rec.t_end + config.ANCHOR_VALUE_WINDOW_S):
             continue
-        if any(key in norm_text(r.after) and key not in norm_text(r.before) for r in other.regions):
+        if any(key in norm_value(r.after) and key not in norm_value(r.before) for r in other.regions):
             out.append(other.event_id)
     return out
 

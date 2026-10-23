@@ -12,6 +12,7 @@ existing call site and test reference stays valid unchanged.
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -81,3 +82,20 @@ def echo_score(observed: str, prompt_text: str) -> float | None:
     if not words:
         return None
     return len(words & content_words(prompt_text)) / len(words)
+
+
+_THOUSANDS = re.compile(r"(?<=\d)[,.](?=\d{3}\b)")
+
+
+def norm_value(value: object) -> str:
+    """Whitespace-, pipe- and case-insensitive text with thousands separators removed, so OCR spacing
+    jitter and '45,000' vs '45000' are the same value."""
+    return _THOUSANDS.sub("", compact(str(value)))
+
+
+def to_number(value: object) -> Optional[float]:
+    """A displayed number ('45,000') as a float, or None when it is not one."""
+    try:
+        return float(str(value).replace(",", "").strip())
+    except ValueError:
+        return None

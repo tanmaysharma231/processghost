@@ -32,7 +32,7 @@ from core.data.tools import WorkbookTools
 from core.models.data import DataCitation, FlowNote, Parameter, RungAttempt, WorkbookProfile
 from core.models.sop import Flag, Resolution, SOPDocument
 from core.slots import step_window
-from core.text_grounding import compact
+from core.text_grounding import compact, norm_value
 
 _WORD = re.compile(r"[A-Za-z]{3,}")
 _MAX_DISTINCT_SHOWN = 6
@@ -76,7 +76,7 @@ def find_parameters(doc: SOPDocument, trail, profile: WorkbookProfile, tools: Wo
             for d in deps:
                 for cond in d.conditions:
                     min_col, _r1, max_col, _r2 = range_boundaries(cond.range)
-                    if cond.sheet == sheet and min_col == max_col and get_column_letter(min_col) == column.letter and facts.norm(cond.criterion) == facts.norm(value):
+                    if cond.sheet == sheet and min_col == max_col and get_column_letter(min_col) == column.letter and norm_value(cond.criterion) == norm_value(value):
                         text = "%s!%s has '%s' typed into it (a criterion on %s)." % (d.sheet, d.ref, cond.criterion, cond.range)
                         evidence.append(text)
                         found.append(FlowNote(

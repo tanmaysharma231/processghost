@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -23,6 +22,7 @@ import cv2
 from pydantic import BaseModel, Field
 
 from core import config
+from core.io.storage import new_named_dir
 from core.llm.client import Metrics
 from core.models.sop import FindingKind
 from core.models.tokens import TranscriptSegment
@@ -121,8 +121,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config.LLM_PROVIDER = args.provider
-    out_dir = config.RUNS_DIR / ("baseline-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = new_named_dir("baseline")
     metrics = Metrics()
     metrics.trace_path = out_dir / "trace.jsonl"
     client = _make_client(metrics)

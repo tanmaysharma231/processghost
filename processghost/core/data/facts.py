@@ -24,11 +24,10 @@ from pydantic import BaseModel, Field
 from core.data.profile import is_formula
 from core.data.tools import Cell, WorkbookTools
 from core.models.data import ColumnProfile, WorkbookProfile
-from core.text_grounding import compact
+from core.text_grounding import norm_value, to_number
 
 _REF = re.compile(r"(?:(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_.]*))!)?(\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?)")
 _CONDITIONAL = re.compile(r"\b(SUMIFS|SUMIF|COUNTIFS|COUNTIF|AVERAGEIFS|AVERAGEIF)\(", re.I)
-_THOUSANDS = re.compile(r"(?<=\d)[,.](?=\d{3}\b)")
 
 
 class Condition(BaseModel):
@@ -61,10 +60,6 @@ class JoinCandidate(BaseModel):
     source_header: str
     source_column: str
     source_ref: str
-
-
-def norm(value: object) -> str:
-    return _THOUSANDS.sub("", compact(str(value)))
 
 
 def _split_args(inner: str) -> List[str]:
@@ -150,13 +145,6 @@ def parse_dependencies(tools: WorkbookTools) -> List[Dependency]:
     return out
 
 
-def _number(text: object) -> Optional[float]:
-    try:
-        return float(str(text).replace(",", "").strip())
-    except ValueError:
-        return None
-
-
 def _whole_call(formula: str) -> Optional[Tuple[str, List[str]]]:
     """(name, args) if the whole formula is ONE call to a function this module can evaluate, else None."""
     m = re.match(r"^=\s*(SUMIFS|SUMIF|COUNTIFS|COUNTIF|SUM)\(", formula.strip(), re.I)
@@ -192,7 +180,7 @@ def evaluate_formula(tools: WorkbookTools, sheet: str, formula: str) -> Optional
         out = []
         for ref in cells_in(located[1]):
             cell = tools.cell_at(located[0], ref)
-            out.append((cell.value if cell is not None and cell.value is not None else "", _number(cell.value) if cell is not None and cell.value is not None else None))
+            out.append((cell.value if cell is not None and cell.value is not None else "", to_number(cell.value) if cell is not None and cell.value is not None else None))
         return out
 
     def keep(pairs: List[Tuple[str, str]]) -> Optional[List[bool]]:
@@ -201,7 +189,7 @@ def evaluate_formula(tools: WorkbookTools, sheet: str, formula: str) -> Optional
             vals, literal = values(range_arg), _literal(crit_arg)
             if vals is None or literal is None:
                 return None
-            hit = [norm(shown) == norm(literal) for shown, _n in vals]
+            hit = [norm_value(shown) == norm_value(literal) for shown, _n in vals]
             mask = hit if mask is None else [a and b for a, b in zip(mask, hit)]
         return mask
 
@@ -210,7 +198,7 @@ def evaluate_formula(tools: WorkbookTools, sheet: str, formula: str) -> Optional
         for arg in args:
             vals = values(arg)
             if vals is None:
-                number = _number(arg)
+                number = to_number(arg)
                 if number is None:
                     return None
                 total += number
@@ -272,7 +260,7 @@ def evaluate(tools: WorkbookTools, cond: Condition) -> Condition:
         cell = tools.cell_at(cond.sheet, ref)
         total += 1
         shown = cell.value if cell is not None and cell.value is not None else ""
-        matching += int(norm(shown) == norm(cond.criterion))
+        matching += int(norm_value(shown) == norm_value(cond.criterion))
     return cond.model_copy(update={"matching": matching, "total": total})
 
 
@@ -288,7 +276,7 @@ def join_candidates(tools: WorkbookTools, profile: WorkbookProfile, target_sheet
     source_cells = {}
     for r, c, cell in tools.sheet_cells(source_sheet):
         if not is_formula(cell.formula or "") and cell.value is not None:
-            source_cells.setdefault(norm(cell.value), []).append((r, c, cell))
+            source_cells.setdefault(norm_value(cell.value), []).append((r, c, cell))
 
     found = []
     for r, c, cell in tools.sheet_cells(target_sheet):
@@ -298,7 +286,7 @@ def join_candidates(tools: WorkbookTools, profile: WorkbookProfile, target_sheet
         target_col = _column_of(profile, target_sheet, letter)
         if target_col is None or target_col.kind not in ("text", "mixed"):
             continue
-        for sr, sc, scell in source_cells.get(norm(cell.value), []):
+        for sr, sc, scell in source_cells.get(norm_value(cell.value), []):
             s_letter = get_column_letter(sc)
             source_col = _column_of(profile, source_sheet, s_letter)
             if source_col is None or source_col.kind != "text" or not source_col.unique:

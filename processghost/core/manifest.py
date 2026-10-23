@@ -17,18 +17,11 @@ from pathlib import Path
 from typing import Any, Dict
 
 from core import config
+from core.io.storage import file_sha256
 from core.llm import prompts
 
 _TRACKED_PACKAGES = ("openai", "langchain-openai", "langchain-core", "pydantic", "opencv-python", "rapidocr-onnxruntime")
 _CONFIG_PREFIXES = ("MODEL_", "ANTHROPIC_MODEL", "LLM_", "MAX_CHECKED", "CHECKER_", "SCREEN_", "RETRY_", "VISION_", "CACHE_ENABLED")
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _git(*args: str) -> str | None:
@@ -64,7 +57,7 @@ def build_manifest(video_path: Path, provider: str | None = None) -> Dict[str, A
         "python": platform.python_version(),
         "packages": {p: _version(p) for p in _TRACKED_PACKAGES},
         "provider": provider or config.LLM_PROVIDER,
-        "input": {"name": video_path.name, "sha256": _sha256(video_path), "bytes": video_path.stat().st_size},
+        "input": {"name": video_path.name, "sha256": file_sha256(video_path), "bytes": video_path.stat().st_size},
         "prompt_hashes": prompt_hashes(),
         "config": {
             k: (list(v) if isinstance(v, tuple) else v)

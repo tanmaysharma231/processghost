@@ -77,9 +77,9 @@ Everything above is expanded in `docs/scope-and-limits.md`; the measured results
 ```
 cd processghost
 pip install -r requirements.txt -c constraints.txt   # or: conda env create -f environment.yml
-export OPENAI_API_KEY=...                # needs ffmpeg on PATH
-python -m scripts.run_pipeline ../data/english_hackathon_test.mp4            # v2 behaviour
-python -m scripts.run_pipeline ../data/english_hackathon_test.mp4 --screen   # with the screen timeline
+export OPENAI_API_KEY=...                # or put it in processghost/.env; needs ffmpeg on PATH
+python -m scripts.run_pipeline ../data/english_hackathon_test.mp4            # Writer + Reviewer only; flags stay unchecked (the Checker needs --screen)
+python -m scripts.run_pipeline ../data/english_hackathon_test.mp4 --screen   # with the screen timeline and the Checker
 python -m scripts.run_pipeline ../data/english_hackathon_test.mp4 --screen \
     --workbook ../data/ProcessGhost_Bills_Tracker_v4_final.xlsx              # with the workbook
 python -m evals.score_findings runs/<run_id>                                 # score a run
@@ -90,9 +90,10 @@ gaps), `sop.json` and `build_spec.json` (for tools, including the questions left
 produced it), `trace.jsonl` (every call, cost and failure), and the evidence frames. With `--workbook` also
 `cell_trail.json`, `workbook_profile.json` and `workbook_match.json`.
 
-Running the same input again is served from a local cache and costs nothing; pass `--no-cache` to
-force fresh calls. Recordings over 15 minutes or 500 MB are refused, and a run stops starting new
-Checker calls once estimated spend passes $2 (`--max-cost` to change). Recordings may contain client
+Model calls are not cached by default. Pass `--cache` while testing to reuse the expensive stages (transcription, Checker,
+document, read fallback); the Writer and Reviewer always call the model. `--provider anthropic` reasons with Claude
+(transcription is always OpenAI Whisper). Recordings over 15 minutes or 500 MB are refused, and a run stops making model
+calls once estimated spend passes $2 (`--max-cost` to change). Recordings may contain client
 data: read `docs/data-handling.md` first, and use `--no-keep-media` and `python -m scripts.cleanup`. Tests: `cd processghost && python -m pytest tests -q` (no API key needed, except
 one integration test that skips without a key and fixture).
 

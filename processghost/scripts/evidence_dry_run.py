@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -98,7 +97,7 @@ def main() -> None:
     if args.split_locus:
         config.SCREEN_SPLIT_ON_LOCUS_SHIFT = True
 
-    out_dir = args.out or (config.RUNS_DIR / ("dryrun-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S")))
+    out_dir = args.out or storage.new_named_dir("dryrun")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     timeline = build_screen_timeline(args.video, out_dir, ocr=ocr)

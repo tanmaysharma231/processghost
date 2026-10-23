@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from core import config
 from core.llm import cache
-from core.llm.retry import StructuredOutputError, llm_retry
+from core.llm.retry import BudgetExceededError, StructuredOutputError, llm_retry
 from core.io.images import frame_to_image_block
 from core.io.storage import save_json
 
@@ -277,6 +277,10 @@ class LLMClient:
         whether the disk cache applies (config.CACHE_STAGES). `payload_extra` merges into the payload
         recorded to the trace without touching `schema`'s own shape -- e.g. the Checker's flag_id.
         """
+        if self.metrics.over_budget():
+            raise BudgetExceededError(
+                f"estimated spend ${self.metrics.cost_usd:.2f} reached MAX_RUN_COST_USD ${config.MAX_RUN_COST_USD:.2f}"
+            )
         model_name = model or self._default_model(bool(images))
         content: list = [{"type": "text", "text": user_text}]
         content += [frame_to_image_block(p, max_dimension=config.VISION_MAX_DIMENSION) for p in images or []]

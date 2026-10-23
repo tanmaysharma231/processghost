@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,6 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from core import config  # noqa: E402
+from core.io.storage import new_named_dir  # noqa: E402
 from core.models.screen import ScreenTimeline  # noqa: E402
 from core.screen.timeline import build_screen_timeline  # noqa: E402
 
@@ -86,7 +86,7 @@ def main() -> None:
     parser.add_argument("--transcript", type=Path, default=None, help="a run.json whose transcript to overlay")
     args = parser.parse_args()
 
-    out_dir = args.out or (config.RUNS_DIR / ("screen-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S")))
+    out_dir = args.out or new_named_dir("screen")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     tl = build_screen_timeline(args.video, out_dir, fps=args.fps)

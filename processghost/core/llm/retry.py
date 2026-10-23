@@ -30,6 +30,11 @@ class StructuredOutputError(RuntimeError):
     """The model answered, but not in the schema's shape (or not at all)."""
 
 
+class BudgetExceededError(RuntimeError):
+    """The run's estimated spend has reached config.MAX_RUN_COST_USD; no further model calls are made.
+    Not retryable. Every stage already degrades on a failed call, so this stops spend without a special case."""
+
+
 _TRANSIENT = (
     openai.RateLimitError,
     openai.APITimeoutError,

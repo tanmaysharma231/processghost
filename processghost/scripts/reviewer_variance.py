@@ -12,9 +12,7 @@ Usage (from the processghost/ directory, OPENAI_API_KEY set, ffmpeg on PATH):
 from __future__ import annotations
 
 import argparse
-import json
 import statistics
-from datetime import datetime
 from pathlib import Path
 
 from core import config
@@ -48,8 +46,7 @@ def main() -> None:
     metrics = Metrics()
     client = _make_client(metrics)
 
-    work_dir = config.RUNS_DIR / ("variance-" + datetime.utcnow().strftime("%Y%m%d-%H%M%S"))
-    work_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = storage.new_named_dir("variance")
     metrics.trace_path = work_dir / "trace.jsonl"
     audio_path = work_dir / "audio.wav"
 

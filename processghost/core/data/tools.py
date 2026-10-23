@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple
+from typing import Dict, Iterator, List, Literal, Optional, Tuple
 
 import openpyxl
 from openpyxl.utils import column_index_from_string, get_column_letter
@@ -26,7 +26,9 @@ from openpyxl.utils.cell import coordinate_to_tuple
 from pydantic import BaseModel, Field
 
 from core import config
-from core.data.profile import clip, detect_header_row, is_formula, sha256_of
+from core.data.profile import clip, detect_header_row, is_formula
+from core.io.storage import file_sha256
+from core.text_grounding import to_number
 from core.text_grounding import compact
 
 Op = Literal["eq", "ne", "contains", "in", "is_empty", "not_empty", "gt", "lt"]
@@ -59,17 +61,10 @@ class ToolResult(BaseModel):
     truncated: bool = False
 
 
-def _num(text: Any) -> Optional[float]:
-    try:
-        return float(str(text).replace(",", "").strip())
-    except ValueError:
-        return None
-
-
 class WorkbookTools:
     def __init__(self, source: Path, work_dir: Path):
         self.source = Path(source)
-        self.sha256_original = sha256_of(self.source)
+        self.sha256_original = file_sha256(self.source)
         work_dir.mkdir(parents=True, exist_ok=True)
         self.copy_path = work_dir / ("workbook_copy" + self.source.suffix.lower())
         shutil.copyfile(self.source, self.copy_path)
@@ -90,7 +85,7 @@ class WorkbookTools:
         return self.source.name
 
     def verify_unchanged(self) -> bool:
-        return sha256_of(self.source) == self.sha256_original
+        return file_sha256(self.source) == self.sha256_original
 
     # ---- helpers ---------------------------------------------------------------------
 
@@ -135,7 +130,7 @@ class WorkbookTools:
             return cell.value is not None or cell.formula is not None
         want = f.value or ""
         if f.op in ("gt", "lt"):
-            a, b = _num(shown), _num(want)
+            a, b = to_number(shown), to_number(want)
             return a is not None and b is not None and (a > b if f.op == "gt" else a < b)
         if f.op == "in":
             return compact(shown) in {compact(v) for v in want.split("|")}

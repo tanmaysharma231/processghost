@@ -25,10 +25,7 @@ from langchain_core.caches import RETURN_VAL_TYPE, BaseCache
 from langchain_core.load import dumpd, load
 
 from core import config
-
-
-def _file_digest(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+from core.io.storage import file_sha256
 
 
 def make_key(kind: str, *parts: Any, files: Iterable[Path] = ()) -> str:
@@ -39,7 +36,7 @@ def make_key(kind: str, *parts: Any, files: Iterable[Path] = ()) -> str:
         h.update(json.dumps(part, sort_keys=True, default=str).encode())
     for path in files:
         h.update(b"\x1e")
-        h.update(_file_digest(path).encode())
+        h.update(file_sha256(path).encode())
     return h.hexdigest()
 
 

@@ -12,7 +12,6 @@ app) has no cached results, so a formula's computed value does not exist; the pr
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 from datetime import date, datetime
@@ -23,19 +22,12 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from core import config
+from core.io.storage import file_sha256
 from core.models.data import ColumnProfile, FormulaCell, FormulaPattern, SheetProfile, WorkbookProfile
 
 _REF = re.compile(r"\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?")
 _HEADER_SCAN_ROWS = 10
 _SAMPLES = 3
-
-
-def sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def clip(value: Any) -> str:
@@ -158,6 +150,6 @@ def profile_workbook(path: Path) -> WorkbookProfile:
             if col.header:
                 headers.setdefault(col.header.strip().lower(), set()).add(sh.name)
     return WorkbookProfile(
-        workbook=Path(path).name, sha256=sha256_of(Path(path)), has_cached_values=_has_cached_values(formula_wb, value_wb),
+        workbook=Path(path).name, sha256=file_sha256(Path(path)), has_cached_values=_has_cached_values(formula_wb, value_wb),
         sheets=sheets, shared_headers=sorted(h for h, where in headers.items() if len(where) > 1),
     )

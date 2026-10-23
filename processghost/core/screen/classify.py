@@ -16,28 +16,19 @@ failure direction is "keep".
 """
 from __future__ import annotations
 
-import re
 from difflib import SequenceMatcher
 from typing import List, Tuple
 
 from core import config
 from core.models.screen import ChangeRecord, EventClass, UnusedEvent
 from core.screen.context import SWITCH_KINDS
-from core.text_grounding import compact
-
-_THOUSANDS = re.compile(r"(?<=\d)[,.](?=\d{3}\b)")
-
-
-def norm_text(text: str) -> str:
-    """Whitespace-, pipe- and case-insensitive text with thousands separators removed, so OCR spacing
-    jitter and '45,000' vs '45000' are the same value."""
-    return _THOUSANDS.sub("", compact(text))
+from core.text_grounding import compact, norm_value
 
 
 def text_changed(before: str, after: str) -> bool:
     """True when `after` is a real change from `before`. Both empty is no change; text that appears or
     vanishes is a change; otherwise a similarity threshold absorbs OCR jitter."""
-    a, b = norm_text(before), norm_text(after)
+    a, b = norm_value(before), norm_value(after)
     if a == b:
         return False
     if not a or not b:
@@ -63,8 +54,8 @@ def explained_by_selection(before: str, after: str, content_before: str, content
     """True when every run of text that differs between `before` and `after` is the content of the cell that was
     deselected or selected (or glyph noise). Moving the selection makes a cell's text appear in or vanish from the
     surrounding grid and formula bar without anything being edited; an edit introduces text found in neither."""
-    a, b = norm_text(before), norm_text(after)
-    contents = [norm_text(content_before), norm_text(content_after)]
+    a, b = norm_value(before), norm_value(after)
+    contents = [norm_value(content_before), norm_value(content_after)]
     for tag, i1, i2, j1, j2 in SequenceMatcher(None, a, b).get_opcodes():
         if tag == "equal":
             continue

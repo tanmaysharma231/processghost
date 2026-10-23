@@ -14,7 +14,7 @@ from core import config, pipeline
 from core.llm import cache
 from core.llm import client as client_mod
 from core.llm.client import LLMClient, Metrics
-from core.llm.retry import StructuredOutputError, is_transient
+from core.llm.retry import BudgetExceededError, StructuredOutputError, is_transient
 
 
 class Answer(BaseModel):
@@ -199,3 +199,14 @@ def test_disk_cache_serves_the_second_identical_call_from_disk(monkeypatch):
     assert disk.hits == 1
     fresh = GenericFakeChatModel(messages=iter([AIMessage(content="x")]), cache=cache.DiskCache())
     assert fresh.invoke([HumanMessage(content="hi")]).content == "first"  # survives a new process/cache object
+
+
+def test_no_model_call_is_made_once_the_run_is_over_budget(monkeypatch):
+    monkeypatch.setattr(config, "MAX_RUN_COST_USD", 1.0)
+    client = _anthropic()
+    client.metrics.cost_usd = 1.5
+    with pytest.raises(BudgetExceededError):
+        client.structured_chat("s", "u", Answer, stage="reconcile")
+    assert _FakeChat.instances == []
+    monkeypatch.setattr(config, "MAX_RUN_COST_USD", 0)  # 0 disables the limit
+    assert client.structured_chat("s", "u", Answer, stage="reconcile") == Answer(value=7)
