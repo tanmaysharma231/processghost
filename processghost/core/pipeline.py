@@ -15,8 +15,8 @@ deleted once the Checker replaced it end-to-end -- see git history for that code
 needed for reference.
 
 Provider switch (config.LLM_PROVIDER): "openai" (default) uses LangChain's ChatOpenAI and
-"anthropic" uses ChatAnthropic (see core/llm/client.py and core/llm/anthropic_client.py:
-structured_chat) for Writer/Reviewer/Checker reasoning. Transcription is always OpenAI Whisper --
+"anthropic" uses ChatAnthropic (both built by core/llm/client.py: LLMClient.structured_chat)
+for Writer/Reviewer/Checker reasoning. Transcription is always OpenAI Whisper --
 Claude has no speech-to-text. Both providers expose the same structured_chat(...) -> BaseModel
 interface, so _write_sop/_review_sop/_run_checker are provider-agnostic.
 """
@@ -31,7 +31,6 @@ from typing import List, NamedTuple, Optional, Tuple
 from core import config
 from core.io import storage
 from core.io import video as video_io
-from core.llm.anthropic_client import AnthropicClient
 from core.llm.client import LLMClient, Metrics, persist_metrics, persist_run_json
 from core import retention
 from core.guards import validate_input, validate_workbook
@@ -95,11 +94,8 @@ from report.flow import write_flow
 
 def _make_client(metrics: Metrics):
     """Provider factory -- the only place run_pipeline branches on config.LLM_PROVIDER for client
-    construction. Both client types expose a compatible .structured_chat(system_prompt, user_text,
-    schema, images=None) -> BaseModel and a .metrics attribute, so
+    construction. One LLMClient serves both providers, so
     _write_sop/_review_sop/the Checker work unchanged regardless of which one is active."""
-    if config.LLM_PROVIDER == "anthropic":
-        return AnthropicClient(metrics=metrics)
     return LLMClient(metrics=metrics)
 
 

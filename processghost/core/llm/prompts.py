@@ -20,7 +20,7 @@ Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and docs/14):
   events no step explains, and whether claimed consequences are shown (docs/24). Called once per run
   on the whole context; every quote it returns is verified in code against the records.
 
-All three are used via structured_chat(...) (core/llm/client.py / core/llm/anthropic_client.py),
+All three are used via structured_chat(...) (core/llm/client.py),
 which validates the response against a Pydantic schema (WriterOutput / ReviewerOutput /
 CheckerOutput in core/models/sop.py) -- no hand-rolled JSON parsing at the call site.
 

@@ -69,7 +69,7 @@ A recording comes in. Anything unusable is refused before money is spent.
 | `MAX_VIDEO_DURATION_S` | `900.0` |
 | `MAX_RUN_COST_USD` | `2.0` |
 | `KEEP_RUN_MEDIA` | `True` |
-| `CACHE_ENABLED` | `True` |
+| `CACHE_ENABLED` | `False` |
 | `LLM_TEMPERATURE` | `0.0` |
 | `LLM_TIMEOUT_S` | `120.0` |
 
@@ -670,7 +670,7 @@ How every model call fails, retries, caches and is capped.
 | `LLM_TIMEOUT_S` | `120.0` |
 | `LLM_TEMPERATURE` | `0.0` |
 | `MAX_RUN_COST_USD` | `2.0` |
-| `CACHE_ENABLED` | `True` |
+| `CACHE_ENABLED` | `False` |
 
 **Decisions that shaped it:** ADR-0008 Idempotent runs through a content-addressed cache and one retry layer
 

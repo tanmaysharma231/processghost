@@ -61,8 +61,9 @@ particular may use requests for training; do not use them for client recordings.
 - `--no-keep-media` (`scripts/run_pipeline.py`, or `config.KEEP_RUN_MEDIA = False`): at the end of
   the run, delete the video copy, audio and every frame directory. Text outputs stay; they still
   contain the transcript and quoted screen text.
-- `--no-cache`: neither read nor write the model-call cache (also what an evaluation of run-to-run
-  variance must use, otherwise it replays the first answer).
+- The model-call cache is off unless you pass `--cache`, and even then only the expensive stages
+  (`config.CACHE_STAGES`: transcription, Checker, document, read fallback) use it. The Writer and
+  Reviewer always call the model, so a run-to-run variance measurement stays valid.
 - `python -m scripts.cleanup --older-than-days N [--media-only] [--include-cache] [--yes]`: delete old
   runs, strip media from them, or clear old cache entries. It is a dry run unless `--yes` is given.
 - Input limits (`config.MAX_VIDEO_BYTES`, `MAX_VIDEO_DURATION_S`) and a soft per-run budget

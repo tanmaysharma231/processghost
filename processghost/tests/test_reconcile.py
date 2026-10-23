@@ -179,7 +179,6 @@ def test_attach_words_assigns_by_time_and_is_a_noop_without_words():
 
 def test_change_records_cache_ocr_by_image_content(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
-    monkeypatch.setattr(config, "CACHE_ENABLED", True)
     tl = _timeline(tmp_path, [2.0, 9.0])
     calls = []
 
@@ -196,7 +195,7 @@ def test_change_records_cache_ocr_by_image_content(tmp_path, monkeypatch):
 
 def test_reconcile_stage_returns_none_and_records_failure_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "get_ocr", lambda: (lambda img: "txt"))
-    monkeypatch.setattr(config, "CACHE_ENABLED", False)
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")  # stub OCR must not enter the shared OCR cache
     tl = _timeline(tmp_path / "screen", [2.0])
     client = _FakeClient(structured_response=RuntimeError("model down"))
     assert pipeline._reconcile_stage(client, tmp_path, _doc(), tl, RAW, TRANSCRIPT) is None
@@ -212,7 +211,7 @@ def test_reconcile_stage_without_ocr_engine_fails_soft(tmp_path, monkeypatch):
 
 def test_reconcile_stage_merges_a_good_answer(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "get_ocr", lambda: (lambda img: "cell F18 value 45000"))
-    monkeypatch.setattr(config, "CACHE_ENABLED", False)
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")  # stub OCR must not enter the shared OCR cache
     tl = _timeline(tmp_path / "screen", [7.0])
     answer = _out(steps=[_step_rec("step-02", ["ev-001"], "F18 holds 45000.", [("ev-001", "F18 value 45000")])],
                   events=[EventAssignment(event_id="ev-001", step_id="step-02")])

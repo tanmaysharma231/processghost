@@ -73,7 +73,7 @@ processghost/
   app/streamlit_app.py        # UI
   core/
     io/                       # video/audio extraction, storage, image encoding
-    llm/                      # LLMClient (OpenAI/LangChain) + AnthropicClient + prompts + parsing
+    llm/                      # LLMClient (LangChain, OpenAI or Anthropic) + disk cache + prompts + parsing
     screen/                   # screen timeline, surfaces, classes, anchors, cell trail, Reconciler, investigations
     data/                     # workbook profile, read-only tools, facts, answers, claim guard, match check, repeat detection
     slots.py, ladder.py       # the four slots of a data step; the video -> document -> person ladder

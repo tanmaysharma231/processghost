@@ -32,7 +32,7 @@ class LLMResponseParseError(ValueError):
 
 def build_sop_from_writer_output(output: WriterOutput, run_id: str, segments: List[dict]) -> SOPDocument:
     """Turn a validated WriterOutput (core/models/sop.py; produced by
-    LLMClient/AnthropicClient.structured_chat -- see core/llm/client.py) into a SOPDocument.
+    LLMClient.structured_chat -- see core/llm/client.py) into a SOPDocument.
 
     Shape validation is pydantic's job now (WriterOutput's schema), done before this function is
     even called. What's left here is the one business rule shape validation can't express: every

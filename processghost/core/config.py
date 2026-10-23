@@ -30,7 +30,7 @@ VISION_MAX_DIMENSION: int = 1024
 # ANTHROPIC_API_KEY for "anthropic").
 LLM_PROVIDER: Literal["openai", "anthropic"] = "openai"
 
-# Models -- Anthropic provider (core/llm/anthropic_client.py). Reasoning is on Claude; transcription still
+# Models -- Anthropic provider (core/llm/client.py). Reasoning is on Claude; transcription still
 # uses OpenAI Whisper because Anthropic has no speech-to-text. UNVERIFIED against the live API: built on the
 # installed langchain-anthropic and tested with fakes only. Sampling settings are not sent (the newest
 # models reject non-default temperature), so LLM_TEMPERATURE does not apply to this provider.
@@ -180,9 +180,12 @@ RETRY_MAX_WAIT_S: float = 60.0
 # Sampling: pinned (not left to the provider default) so a rerun differs only by model nondeterminism
 # that temperature 0 cannot remove, and so it is part of every cache key and run manifest.
 LLM_TEMPERATURE: float = 0.0
-# Content-addressed model-call cache (core/llm/cache.py). Disable per run with scripts/run_pipeline.py
-# --no-cache; the directory is safe to delete at any time.
-CACHE_ENABLED: bool = True
+# Content-addressed model-call cache (core/llm/cache.py): a testing aid. Off by default; enable per run
+# with scripts/run_pipeline.py --cache. Only the stages in CACHE_STAGES are ever cached -- the
+# expensive image/document/transcription calls. The Writer, Reviewer and Reconciler always call the
+# model, so their run-to-run variation stays measurable. The directory is safe to delete at any time.
+CACHE_ENABLED: bool = False
+CACHE_STAGES: frozenset = frozenset({"transcribe", "checker", "document", "read_fallback"})
 CACHE_DIR = ROOT / "cache"
 
 # Input and spend limits (core/guards.py, core/pipeline.py). Tight on purpose: the pipeline is only

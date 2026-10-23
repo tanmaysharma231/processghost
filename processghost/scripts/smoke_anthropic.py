@@ -11,8 +11,7 @@ import os
 from pydantic import BaseModel
 
 from core import config
-from core.llm.anthropic_client import AnthropicClient
-from core.llm.client import Metrics
+from core.llm.client import LLMClient, Metrics
 
 
 class Smoke(BaseModel):
@@ -25,7 +24,7 @@ def main() -> None:
         raise SystemExit("ANTHROPIC_API_KEY is not set")
     config.CACHE_ENABLED = False
     metrics = Metrics()
-    out = AnthropicClient(metrics=metrics).structured_chat(
+    out = LLMClient(metrics=metrics, provider="anthropic").structured_chat(
         "Answer with the requested structure only.", "How many minutes are in two hours?", Smoke, stage="smoke"
     )
     print("model:", config.ANTHROPIC_MODEL_TEXT)

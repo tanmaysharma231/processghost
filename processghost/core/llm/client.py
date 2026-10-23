@@ -1,12 +1,14 @@
-"""OpenAI client wrapper with token/cost logging.
+"""One LLM client for every provider, built on LangChain, plus the run's token/cost/trace accounting.
 
-v2 note: `structured_chat` (added in Phase 3) is the LangChain-based path used by the Writer,
-Reviewer, and Checker stages -- see core/llm/parsing.py: build_sop_from_writer_output /
-merge_reviewer_output and processghost-v2-writer-reviewer-checker-plan.md. `chat`/`vision` below
-are the original raw-SDK methods, left untouched: they're still called by the dead v1 pipeline
-functions in core/pipeline.py (kept alive, unimported by run_pipeline, until Phase 3 acceptance
-per the owner's plan) and by tests/test_pipeline_fallback.py's coverage of them. `transcribe` also
-stays on the raw SDK -- Whisper is not a chat completion, so LangChain has nothing to add there.
+`LLMClient.structured_chat` is the single call path for the Writer, Reviewer, Checker, Reconciler,
+data Checker and read fallback. The provider (config.LLM_PROVIDER: "openai" or "anthropic") only
+changes which chat model `init_chat_model` builds; schema validation, images, retry, caching and
+metrics are the same code for both. See core/llm/parsing.py: build_sop_from_writer_output /
+merge_reviewer_output for the business rules applied on top of the validated object.
+
+Transcription (`transcribe`) stays on the raw OpenAI SDK -- Whisper is not a chat completion and
+Anthropic has no speech-to-text -- so the OpenAI client is built only when a transcription is
+actually requested.
 """
 from __future__ import annotations
 
@@ -18,15 +20,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from openai import OpenAI
 from pydantic import BaseModel
 
 from core import config
 from core.llm import cache
 from core.llm.retry import StructuredOutputError, llm_retry
-from core.io.images import frame_to_data_uri
+from core.io.images import frame_to_image_block
 from core.io.storage import save_json
 
 
@@ -122,8 +124,7 @@ class Metrics:
     def record_payload(self, stage: str, payload: dict) -> None:
         """Write the actual structured output of a Writer/Reviewer/Checker call to the trace, as
         its own line -- separate from add()'s "call" event so cost/token accounting can never be
-        duplicated by a caller that (re)records a payload. Both structured_chat implementations
-        (core/llm/client.py: LLMClient, core/llm/anthropic_client.py: AnthropicClient) call this right
+        duplicated by a caller that (re)records a payload. LLMClient.structured_chat calls this right
         after the model's output validates against its schema, passing `payload.model_dump()`.
 
         This is what turns trace.jsonl from "a Checker call finished, 9s, $0.05" into "here is
@@ -188,15 +189,42 @@ class Metrics:
 
 
 class LLMClient:
-    def __init__(self, metrics: Optional[Metrics] = None):
-        self.client = _load_client()
+    def __init__(self, metrics: Optional[Metrics] = None, provider: Optional[str] = None):
+        self.provider = provider or config.LLM_PROVIDER
         self.metrics = metrics or Metrics()
+        self._openai: Optional[OpenAI] = None
+        self._disk_cache = cache.DiskCache()
+
+    @property
+    def client(self) -> OpenAI:  # used only by transcribe()
+        if self._openai is None:
+            self._openai = _load_client()
+        return self._openai
+
+    def _default_model(self, with_images: bool) -> str:
+        if self.provider == "anthropic":
+            return config.ANTHROPIC_MODEL_VISION if with_images else config.ANTHROPIC_MODEL_TEXT
+        return config.MODEL_VISION if with_images else config.MODEL_TEXT
+
+    def _chat_model(self, model_name: str, stage: str):
+        """The one place a chat model is built. max_retries=0: core/llm/retry.py owns retrying, so one
+        call is never retried by two layers. Anthropic gets no temperature (the newest Claude models
+        reject non-default sampling values); the disk cache covers repeatability there."""
+        kwargs: Dict[str, Any] = {"max_retries": 0, "timeout": config.LLM_TIMEOUT_S}
+        if self.provider == "anthropic":
+            kwargs["max_tokens"] = config.ANTHROPIC_MAX_TOKENS
+        else:
+            kwargs["temperature"] = config.LLM_TEMPERATURE
+        use_cache = config.CACHE_ENABLED and stage in config.CACHE_STAGES
+        kwargs["cache"] = self._disk_cache if use_cache else False
+        return init_chat_model(model_name, model_provider=self.provider, **kwargs)
 
     @llm_retry()
     def transcribe(self, audio_path: Path, model: str | None = None) -> Dict[str, Any]:
         model_name = model or config.MODEL_WHISPER
+        use_cache = config.CACHE_ENABLED and "transcribe" in config.CACHE_STAGES
         key = cache.make_key("transcribe", "openai", model_name, "words", files=[audio_path])
-        hit = cache.get("transcribe", key)
+        hit = cache.get("transcribe", key) if use_cache else None
         if hit is not None:
             self.metrics.add({}, model_name, stage="transcribe", latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
             return hit
@@ -220,28 +248,9 @@ class LLMClient:
             meta={"duration_s": duration_s},
             cost_usd_override=cost_usd,
         )
-        cache.put("transcribe", key, resp_dict)
+        if use_cache:
+            cache.put("transcribe", key, resp_dict)
         return resp_dict
-
-    @llm_retry()
-    def chat(self, messages: list[dict], model: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        model_name = model or config.MODEL_TEXT
-        t0 = time.monotonic()
-        resp = self.client.chat.completions.create(model=model_name, messages=messages, **kwargs)
-        latency_ms = (time.monotonic() - t0) * 1000
-        usage = resp.usage.dict() if hasattr(resp, "usage") else {}
-        self.metrics.add(usage or {}, model_name, stage="legacy_chat", latency_ms=latency_ms)
-        return resp.dict()
-
-    @llm_retry()
-    def vision(self, messages: list[dict], model: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        model_name = model or config.MODEL_VISION
-        t0 = time.monotonic()
-        resp = self.client.chat.completions.create(model=model_name, messages=messages, **kwargs)
-        latency_ms = (time.monotonic() - t0) * 1000
-        usage = resp.usage.dict() if hasattr(resp, "usage") else {}
-        self.metrics.add(usage or {}, model_name, stage="legacy_vision", latency_ms=latency_ms)
-        return resp.dict()
 
     @llm_retry()
     def structured_chat(
@@ -255,82 +264,48 @@ class LLMClient:
         model: Optional[str] = None,
         payload_extra: Optional[dict] = None,
     ) -> BaseModel:
-        """LangChain path: ask the model for `schema`-shaped output directly via
-        with_structured_output(method="json_schema") -- no hand-rolled JSON parsing at the call
-        site (core/llm/parsing.py's build_sop_from_writer_output / merge_reviewer_output still
-        apply business rules like segment/transition coverage on top of the validated object, but
-        shape validation itself is pydantic's job now, for both providers).
+        """Ask the model for `schema`-shaped output via with_structured_output(method="json_schema")
+        -- no hand-rolled JSON parsing at the call site. Business rules (segment/transition
+        coverage) are applied afterwards by core/llm/parsing.py on the validated object.
 
-        Images (Checker's need) are attached as base64 ImageContentBlocks per the installed
-        langchain-core content-block API -- checked directly against the installed package rather
-        than older image_url-style examples, which are a different (pre-v1) LangChain convention.
-        Reuses frame_to_data_uri's resize step (core.config.VISION_MAX_DIMENSION) and strips the
-        data-URI prefix rather than duplicating the encode/resize logic.
+        Images are attached as provider-neutral base64 image blocks (core.io.images:
+        frame_to_image_block, downscaled to config.VISION_MAX_DIMENSION). include_raw=True is what
+        returns token usage for Metrics. A response that does not match `schema` raises
+        StructuredOutputError, which llm_retry re-asks once.
 
-        include_raw=True is required to get token usage back for Metrics -- with_structured_output
-        alone returns only the parsed object. Raises RuntimeError if the model's output didn't
-        parse against `schema` even after LangChain's own retries.
-
-        `stage` ("writer" / "reviewer" / "checker" / ...) is passed straight through to
-        Metrics.add so every call is traceable back to which pipeline stage made it -- see
-        core/pipeline.py's call sites. Also passed to Metrics.record_payload alongside the parsed
-        result itself, so the trace carries the real output, not just cost/latency metadata.
-
-        `payload_extra` merges into that recorded payload without touching `schema`'s own shape --
-        for the Checker, the caller has a flag_id CheckerOutput itself doesn't carry (it's a
-        per-flag call; the flag is known by the caller, not part of what the model was asked to
-        return), so `_check_flag_with_events` (core/pipeline.py) passes `{"flag_id": flag.flag_id}` here
-        purely so a live trace consumer can tell which flag a given payload resolved.
+        `stage` ("writer" / "reviewer" / "checker" / ...) tags the metrics and trace line, and decides
+        whether the disk cache applies (config.CACHE_STAGES). `payload_extra` merges into the payload
+        recorded to the trace without touching `schema`'s own shape -- e.g. the Checker's flag_id.
         """
-        model_name = model or (config.MODEL_VISION if images else config.MODEL_TEXT)
+        model_name = model or self._default_model(bool(images))
         content: list = [{"type": "text", "text": user_text}]
-        for frame_path in images or []:
-            data_uri = frame_to_data_uri(frame_path, max_dimension=config.VISION_MAX_DIMENSION)
-            _, _, b64 = data_uri.partition(",")
-            content.append({"type": "image", "base64": b64, "mime_type": "image/png"})
+        content += [frame_to_image_block(p, max_dimension=config.VISION_MAX_DIMENSION) for p in images or []]
+        chat_model = self._chat_model(model_name, stage).with_structured_output(schema, method="json_schema", include_raw=True)
 
-        key = cache.make_key(
-            "structured", "openai", model_name, system_prompt, user_text, schema.__name__,
-            schema.model_json_schema(), config.LLM_TEMPERATURE, files=images or [],
-        )
-        hit = cache.get("structured", key)
-        if hit is not None:
-            parsed = schema.model_validate(hit)
-            self.metrics.add({}, model_name, stage=stage, latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
-            self.metrics.record_payload(stage, {**(payload_extra or {}), **parsed.model_dump(mode="json")})
-            return parsed
-
-        messages = [SystemMessage(content=system_prompt), HumanMessage(content=content)]
-        # max_retries=0: core/llm/retry.py owns retrying, so one call is never retried by two layers.
-        chat_model = ChatOpenAI(
-            model=model_name, api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_API_BASE") or None,
-            temperature=config.LLM_TEMPERATURE, max_retries=0, timeout=config.LLM_TIMEOUT_S,
-        ).with_structured_output(schema, method="json_schema", include_raw=True)
-
+        hits_before = self._disk_cache.hits
         t0 = time.monotonic()
-        result = chat_model.invoke(messages)
+        result = chat_model.invoke([SystemMessage(content=system_prompt), HumanMessage(content=content)])
         latency_ms = (time.monotonic() - t0) * 1000
         if result.get("parsing_error") is not None:
+            self._disk_cache.discard_last()  # never keep a bad answer, or the re-ask would read it back
             raise StructuredOutputError(f"structured output did not match {schema.__name__}: {result['parsing_error']}")
 
-        raw = result["raw"]
-        usage_metadata = getattr(raw, "usage_metadata", None) or {}
-        self.metrics.add(
-            {
-                "prompt_tokens": usage_metadata.get("input_tokens", 0),
-                "completion_tokens": usage_metadata.get("output_tokens", 0),
-            },
-            model_name,
-            stage=stage,
-            latency_ms=latency_ms,
-            meta={"images": len(images)} if images else None,
-        )
         parsed = result["parsed"]
-        payload = parsed.model_dump(mode="json")
-        cache.put("structured", key, payload)
-        if payload_extra:
-            payload = {**payload_extra, **payload}
-        self.metrics.record_payload(stage, payload)
+        if self._disk_cache.hits > hits_before:
+            self.metrics.add({}, model_name, stage=stage, latency_ms=0.0, meta={"cached": True}, cost_usd_override=0.0)
+        else:
+            usage_metadata = getattr(result["raw"], "usage_metadata", None) or {}
+            self.metrics.add(
+                {
+                    "prompt_tokens": usage_metadata.get("input_tokens", 0),
+                    "completion_tokens": usage_metadata.get("output_tokens", 0),
+                },
+                model_name,
+                stage=stage,
+                latency_ms=latency_ms,
+                meta={"images": len(images)} if images else None,
+            )
+        self.metrics.record_payload(stage, {**(payload_extra or {}), **parsed.model_dump(mode="json")})
         return parsed
 
 

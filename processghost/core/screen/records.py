@@ -25,15 +25,16 @@ from core.screen.timeline import chrome_text
 
 
 def cached_ocr(ocr: OcrFn) -> OcrFn:
-    """Wrap `ocr` with the content-addressed cache, keyed on the pixels it is given."""
+    """Wrap `ocr` with the content-addressed cache, keyed on the pixels it is given. Always on: OCR is
+    local and deterministic, so it is not governed by config.CACHE_ENABLED (the model-call switch)."""
 
     def run(img: np.ndarray) -> str:
         key = cache.make_key("ocr", config.SCREEN_RECORD_CROP_PAD_PX, list(img.shape), hashlib.sha256(img.tobytes()).hexdigest())
-        hit = cache.get("ocr", key)
+        hit = cache.get("ocr", key, enabled=True)
         if hit is not None:
             return hit["text"]
         text = ocr(img)
-        cache.put("ocr", key, {"text": text})
+        cache.put("ocr", key, {"text": text}, enabled=True)
         return text
 
     return run

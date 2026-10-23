@@ -1,19 +1,15 @@
 """Unit tests for core/llm/retry.py (transient-only retry policy) and core/llm/cache.py
-(content-addressed call cache), plus the cache hit path through LLMClient.structured_chat with a
-fake chat model. No network, no API key."""
+(content-addressed call cache). No network, no API key. The cache's LangChain adapter and the
+client's use of it are tested in tests/test_llm_client.py."""
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import httpx
 import openai
 import pytest
-from pydantic import BaseModel
 
 from core import config
 from core.llm import cache
-from core.llm import client as client_mod
-from core.llm.client import LLMClient, Metrics
+from core.llm.client import Metrics
 from core.llm.retry import StructuredOutputError, is_transient, llm_retry
 
 
@@ -146,58 +142,3 @@ def test_key_changes_with_every_input(tmp_path):
     assert base != cache.make_key("s", "m", "prompt", "text2", files=[img_a])
     assert base != cache.make_key("s", "m", "prompt", "text", files=[img_b])
     assert base != cache.make_key("t", "m", "prompt", "text", files=[img_a])
-
-
-class _Out(BaseModel):
-    answer: str
-
-
-class _FakeChat:
-    invocations = 0
-
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def with_structured_output(self, schema, **kwargs):
-        return self
-
-    def invoke(self, messages):
-        type(self).invocations += 1
-        return {
-            "parsed": _Out(answer="42"),
-            "raw": SimpleNamespace(usage_metadata={"input_tokens": 100, "output_tokens": 10}),
-            "parsing_error": None,
-        }
-
-
-def test_structured_chat_second_identical_call_is_free(cache_dir, monkeypatch):
-    monkeypatch.setattr(client_mod, "_load_client", lambda: object())
-    monkeypatch.setattr(client_mod, "ChatOpenAI", _FakeChat)
-    _FakeChat.invocations = 0
-    c = LLMClient(metrics=Metrics())
-
-    first = c.structured_chat("sys", "user", _Out, stage="writer")
-    cost_after_first = c.metrics.cost_usd
-    second = c.structured_chat("sys", "user", _Out, stage="writer")
-
-    assert first == second == _Out(answer="42")
-    assert _FakeChat.invocations == 1  # the second call never reached the model
-    assert c.metrics.cost_usd == cost_after_first  # and cost nothing
-    assert c.metrics.records[-1]["meta"] == {"cached": True}
-
-    c.structured_chat("sys", "different user text", _Out, stage="writer")
-    assert _FakeChat.invocations == 2  # any change to the input is a miss
-
-
-def test_chat_model_is_built_with_pinned_temperature_and_no_internal_retries(cache_dir, monkeypatch):
-    seen = {}
-
-    class _Spy(_FakeChat):
-        def __init__(self, **kwargs):
-            seen.update(kwargs)
-
-    monkeypatch.setattr(client_mod, "_load_client", lambda: object())
-    monkeypatch.setattr(client_mod, "ChatOpenAI", _Spy)
-    LLMClient(metrics=Metrics()).structured_chat("sys", "u", _Out, stage="writer")
-    assert seen["temperature"] == config.LLM_TEMPERATURE == 0.0
-    assert seen["max_retries"] == 0

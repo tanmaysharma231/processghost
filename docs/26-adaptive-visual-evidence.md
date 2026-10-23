@@ -438,7 +438,7 @@ claims the adaptive layer is cheaper or more accurate: no comparison has been ru
 
 Cost or accuracy against the fixed-frame and single-model baselines; repeat-run variance of the above; the
 examined/skipped statuses when a cap or budget actually bites; any web or ERP surface; the locus split. The
-Claude provider (`core/llm/anthropic_client.py`) is built and tested with fakes only: no Anthropic key was
+Claude provider (`core/llm/client.py`, `provider="anthropic"`) is built and tested with fakes only: no Anthropic key was
 available, and the installed langchain-anthropic uses an older structured-output request that may need an
 upgrade (`python -m scripts.smoke_anthropic` tests it). The open questions from Part IV are tracked as Q10 to Q14 in the decision register.
 

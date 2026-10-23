@@ -56,3 +56,11 @@ def frame_to_data_uri(frame_path: Path, max_dimension: int | None = None) -> str
         resized.save(buf, format="PNG")
         encoded = base64.b64encode(buf.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def frame_to_image_block(frame_path: Path, max_dimension: int | None = None) -> dict:
+    """A provider-neutral base64 image content block, as LangChain's chat models accept it:
+    {"type": "image", "base64": ..., "mime_type": ...}. Same resize rules as frame_to_data_uri."""
+    header, _, encoded = frame_to_data_uri(frame_path, max_dimension).partition(",")
+    mime = header[len("data:"):].split(";")[0]
+    return {"type": "image", "base64": encoded, "mime_type": mime}

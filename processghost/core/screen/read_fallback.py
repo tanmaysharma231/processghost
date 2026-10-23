@@ -142,7 +142,7 @@ def repair_records(
         user = "Images, in order: " + ", ".join("image %d has id %s" % (i + 1, k) for i, k in enumerate(ids))
         out = client.structured_chat(
             prompts.READ_SYSTEM, user, VlmReadOutput, stage="read_fallback",
-            images=[p for _, _, p in queue], model=config.MODEL_VISION,
+            images=[p for _, _, p in queue],
         )
         by_id = {r.id: r for r in out.readings}
         for (event_id, side, _path), key in zip(queue, ids):

@@ -19,7 +19,7 @@ Response = Union[dict, Exception, Callable[..., dict]]
 
 
 class _FakeClient:
-    """Stands in for LLMClient/AnthropicClient.
+    """Stands in for LLMClient.
 
     Each of chat_response/vision_response/structured_response may be:
     - a plain value (dict) -- returned as-is on every call,

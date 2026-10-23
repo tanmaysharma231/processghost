@@ -170,15 +170,11 @@ def test_cache_entries_are_cleaned_only_when_asked(tmp_path):
 def test_provider_calls_have_a_timeout(monkeypatch):
     seen = {}
 
-    class _Spy:
-        def __init__(self, **kwargs):
-            seen.update(kwargs)
+    def _spy(model, model_provider, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop after construction")
 
-        def with_structured_output(self, *a, **k):
-            raise RuntimeError("stop after construction")
-
-    monkeypatch.setattr(client_mod, "_load_client", lambda: object())
-    monkeypatch.setattr(client_mod, "ChatOpenAI", _Spy)
+    monkeypatch.setattr(client_mod, "init_chat_model", _spy)
     from pydantic import BaseModel
 
     class Out(BaseModel):

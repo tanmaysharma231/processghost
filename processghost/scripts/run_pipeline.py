@@ -20,13 +20,13 @@ def main() -> None:
     parser.add_argument("--no-reconcile", action="store_true", help="with --screen: skip the Reconciler and use Align's counting heuristic (for comparison)")
     parser.add_argument("--workbook", type=Path, default=None, help="the workbook the person worked in: enables the read-only document rung (questions the video left open are checked against it)")
     parser.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
-    parser.add_argument("--no-cache", action="store_true", help="ignore and do not write the model-call cache")
+    parser.add_argument("--cache", action="store_true", help="reuse and write the model-call cache for the expensive stages (config.CACHE_STAGES); for testing")
     parser.add_argument("--no-keep-media", action="store_true", help="delete the run's video copy, audio and frames when it ends")
     parser.add_argument("--max-cost", type=float, default=None, help="soft per-run budget in USD (default: config.MAX_RUN_COST_USD)")
     args = parser.parse_args()
 
     config.LLM_PROVIDER = args.provider
-    config.CACHE_ENABLED = not args.no_cache
+    config.CACHE_ENABLED = args.cache
     config.KEEP_RUN_MEDIA = not args.no_keep_media
     if args.max_cost is not None:
         config.MAX_RUN_COST_USD = args.max_cost
