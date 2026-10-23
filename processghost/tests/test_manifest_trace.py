@@ -18,7 +18,7 @@ def test_manifest_describes_the_input_and_the_code(tmp_path):
     assert m["provider"] == "openai"
     assert m["input"]["name"] == "v.mp4" and m["input"]["bytes"] == 3
     assert m["input"]["sha256"] == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    assert {"WRITER_SYSTEM", "REVIEWER_SYSTEM", "CHECKER_SYSTEM", "CHECKER_EVENT_SYSTEM"} <= set(m["prompt_hashes"])
+    assert {"WRITER_SYSTEM", "REVIEWER_SYSTEM", "CHECKER_EVENT_SYSTEM"} <= set(m["prompt_hashes"])
     assert m["config"]["LLM_TEMPERATURE"] == 0.0 and "SCREEN_FPS" in m["config"]
     assert "git_commit" in m and "packages" in m
     json.dumps(m)  # must be serializable as-is

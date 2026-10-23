@@ -14,15 +14,13 @@ T = TypeVar("T")
 
 # Frame filenames encode their absolute video timestamp in milliseconds, e.g. "t00014000.png" ==
 # 14.000s. See extract_frames_window's docstring for why this matters -- it is not just a naming
-# convenience, it is what makes cross-flag frame sharing and the Sarvam OCR ZIP round-trip
-# (core/llm/sarvam_client.py: ocr_extract_frames returns {filename: text}) both correct.
+# convenience, it is what makes cross-flag frame sharing correct.
 _FRAME_NAME_RE = re.compile(r"^t(\d{8})\.png$")
 
 
 def frame_name_for(t_s: float) -> str:
     """Canonical filename encoding an absolute timestamp: frame_name_for(14.0) == "t00014000.png".
-    Fixed-width zero-padded milliseconds means lexical sort == chronological sort, which
-    core/llm/sarvam_client.py's _parse_ocr_output_zip relies on for its positional fallback."""
+    Fixed-width zero-padded milliseconds means lexical sort == chronological sort."""
     return f"t{round(t_s * 1000):08d}.png"
 
 
@@ -118,15 +116,11 @@ def extract_frames_window(
     """Extract frames densely across [start_s, end_s) for the Checker (Phase 3).
 
     Every frame's absolute timestamp is carried in its filename (frame_name_for) rather than
-    inferred positionally by a caller, for three reasons documented in the v2 plan:
+    inferred positionally by a caller, for two reasons documented in the v2 plan:
     1. Cross-flag frame sharing -- two flags whose windows overlap produce identical filenames for
        the shared timestamps, so step 1 below can skip re-extracting them entirely.
-    2. The Sarvam OCR ZIP round-trip (SarvamClient.ocr_extract_frames returns {filename: text}) --
-       a globally unique, self-describing filename means no side table is needed to map OCR text
-       back to a timestamp, and prevents two different flags' windows both producing
-       "frame_000001.png" and silently colliding inside the ZIP.
-    3. Lexical sort == chronological sort (fixed-width zero-padded ms), keeping
-       _parse_ocr_output_zip's positional fallback correct.
+    2. Lexical sort == chronological sort (fixed-width zero-padded ms), and no two flags' windows
+       can both produce "frame_000001.png" and silently collide.
 
     All Checker frames for a run should live in one flat out_dir (not per-window subdirs) --
     sharing is by filename, so subdirs would defeat it.

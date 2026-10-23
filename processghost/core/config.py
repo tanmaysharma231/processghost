@@ -25,27 +25,18 @@ VISION_MAX_DIMENSION: int = 1024
 
 # --- Provider switch --------------------------------------------------------
 # "openai": Whisper + LangChain's ChatOpenAI (gpt-4o text, gpt-4o-mini vision) -- the original,
-# fully verified path, real vision per Checker call. "sarvam": Saaras v3 (batch STT) + Sarvam-105B
-# + Sarvam document-intelligence OCR (no true vision model exists on Sarvam -- see
-# core/llm/sarvam_client.py and core/pipeline.py for the OCR-extract-then-text-reason design this
-# implies). Requires SARVAM_API_KEY.
-LLM_PROVIDER: Literal["openai", "sarvam", "anthropic"] = "sarvam"
+# fully verified path, real vision per Checker call. "anthropic": ChatAnthropic (ANTHROPIC_MODEL_*
+# below); transcription stays on OpenAI Whisper either way. Requires OPENAI_API_KEY (and
+# ANTHROPIC_API_KEY for "anthropic").
+LLM_PROVIDER: Literal["openai", "anthropic"] = "openai"
 
 # Models -- Anthropic provider (core/llm/anthropic_client.py). Reasoning is on Claude; transcription still
 # uses OpenAI Whisper because Anthropic has no speech-to-text. UNVERIFIED against the live API: built on the
 # installed langchain-anthropic and tested with fakes only. Sampling settings are not sent (the newest
 # models reject non-default temperature), so LLM_TEMPERATURE does not apply to this provider.
-ANTHROPIC_MODEL_TEXT = "claude-sonnet-5-5"
-ANTHROPIC_MODEL_VISION = "claude-sonnet-5-5"
+ANTHROPIC_MODEL_TEXT = "claude-sonnet-5"
+ANTHROPIC_MODEL_VISION = "claude-sonnet-5"
 ANTHROPIC_MAX_TOKENS: int = 16000
-
-# Models -- Sarvam provider
-SARVAM_MODEL_CHAT = "sarvam-105b"
-SARVAM_MODEL_STT = "saaras:v3"
-SARVAM_MODEL_TTS = "bulbul:v3"
-SARVAM_TTS_SPEAKER = "shubh"
-SARVAM_TTS_LANGUAGE_CODE = "en-IN"
-SARVAM_DOC_INTELLIGENCE_LANGUAGE = "en-IN"
 
 # --- Checker -----------------------------------------------------------------
 # Run-level cap on how many flags actually get a Checker call (processed in severity order,
@@ -57,9 +48,6 @@ CHECKER_LEAD_IN_S: float = 3.0
 CHECKER_MIN_WINDOW_S: float = 4.0
 CHECKER_MAX_FRAMES_PER_FLAG: int = 16
 CHECKER_FALLBACK_WINDOW_S: float = 30.0
-# Page budget for the ONE batched Sarvam document-intelligence job covering every checked flag's
-# frames per run -- see SarvamClient.ocr_extract_frames / core/pipeline.py: _run_checker.
-CHECKER_MAX_OCR_FRAMES: int = 60
 
 # --- Screen timeline ---------------------------------------------------------
 # Pixel-diff parameters for core/screen/diff.py (docs/22 stage 0b). All distances/areas are in the
@@ -165,17 +153,15 @@ INTAKE_MAX_ROWS_PER_SHEET: int = 200
 INTAKE_MAX_CELL_CHARS: int = 200
 
 # --- Cost estimates ----------------------------------------------------------
-# $ per 1M tokens, (prompt, completion). Sourced 2026-08-29:
-# OpenAI: https://www.cloudzero.com/blog/openai-pricing/ (official pricing page figures).
-# Sarvam: third-party aggregators (artificialanalysis.ai, sarvam.ai/api-pricing) -- Sarvam's own
-# docs are unreliable (see core/llm/sarvam_client.py's module docstring); re-verify before trusting
-# this for real budgeting. A model not in this table costs $0.0 with meta={"pricing": "unknown"}
+# $ per 1M tokens, (prompt, completion). OpenAI sourced 2026-08-29 from
+# https://www.cloudzero.com/blog/openai-pricing/ (official pricing page figures); re-verify before
+# trusting this for real budgeting. A model not in this table costs $0.0 with meta={"pricing": "unknown"}
 # (core/llm/client.py: estimate_cost_usd) rather than raising or silently looking free.
 PRICING_PER_1M_TOKENS: dict[str, tuple[float, float]] = {
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
-    "sarvam-105b": (0.04, 0.17),
     # Anthropic, from the Claude API reference cached 2026-10-06 (Haiku 5.5 is for prompts up to 100K tokens).
+    "claude-sonnet-5": (2.00, 10.00),
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
     "claude-haiku-5-5": (0.10, 0.50),
@@ -183,7 +169,6 @@ PRICING_PER_1M_TOKENS: dict[str, tuple[float, float]] = {
 # Non-token-based costs, priced by their own real unit -- forcing these into the token table above
 # would silently misprice them.
 WHISPER_COST_PER_MINUTE: float = 0.006
-SARVAM_OCR_COST_PER_PAGE: float = 0.006  # ~INR 0.50/page at time of sourcing above
 
 # --- Reliability -------------------------------------------------------------
 # Retry policy (core/llm/retry.py): transient errors only (rate limit, timeout, connection, 5xx),

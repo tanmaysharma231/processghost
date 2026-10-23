@@ -41,7 +41,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("video", type=Path)
     parser.add_argument("--runs", type=int, default=10)
-    parser.add_argument("--provider", default="openai", choices=["openai", "sarvam"])
+    parser.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
     args = parser.parse_args()
 
     config.LLM_PROVIDER = args.provider

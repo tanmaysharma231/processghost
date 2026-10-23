@@ -8,12 +8,10 @@ Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and docs/14):
 - REVIEWER_SYSTEM: draft steps + transcript -> transitions (state that carries between consecutive
   steps -- see core/models/sop.py: StepTransition) + flags (ambiguity/structural gaps). Called once
   per run for the same whole-context reasoning as the Writer.
-- CHECKER_SYSTEM: one flag's question + relevant doc/transcript excerpt + frames (OpenAI) or OCR
-  text (Sarvam, no true vision model) -> a verdict (resolved/contradicted/unresolvable). Called
-  ONCE PER FLAG, deliberately -- each flag has its own window/frames/question, and batching
-  unrelated checks into one call would muddy each one's evidence.
-
-- CHECKER_EVENT_SYSTEM: the same Checker job for the v3 screen-event evidence path (docs/22): the
+- CHECKER_EVENT_SYSTEM: one flag's question + relevant doc/transcript excerpt + screen-event evidence
+  -> a verdict (resolved/contradicted/unresolvable). Called ONCE PER FLAG, deliberately -- each flag
+  has its own evidence and question, and batching unrelated checks into one call would muddy each
+  one's evidence. The v3 screen-event evidence path (docs/22): the
   evidence is a full downscaled frame, numbered before/after tiles of what changed, and OCR text,
   and it adds an explicit rule against restating the question/step/transcript as an observation.
 
@@ -22,7 +20,7 @@ Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and docs/14):
   events no step explains, and whether claimed consequences are shown (docs/24). Called once per run
   on the whole context; every quote it returns is verified in code against the records.
 
-All three are used via structured_chat(...) (core/llm/client.py / core/llm/sarvam_client.py),
+All three are used via structured_chat(...) (core/llm/client.py / core/llm/anthropic_client.py),
 which validates the response against a Pydantic schema (WriterOutput / ReviewerOutput /
 CheckerOutput in core/models/sop.py) -- no hand-rolled JSON parsing at the call site.
 
@@ -226,97 +224,6 @@ parsing.
 
 Respond with only the JSON object, no other text.
 </output_format>"""
-
-
-CHECKER_SYSTEM = """<role>
-You are resolving ONE open question about a Standard Operating Procedure (SOP) that was drafted \
-from a narrated screen-recording walkthrough. You are given the question, which FAMILY it belongs \
-to ("ambiguity" or "structural"), the relevant excerpt of the SOP (the step(s) it concerns), the \
-transcript spoken during the question's time window, and either real screenshots from that window \
-or text extracted from those screenshots (OCR). Decide whether what is on screen actually answers \
-the question.
-</role>
-
-<context>
-The person who recorded this walkthrough knew things they never said out loud, and this pipeline \
-exists to surface exactly those. Your two outcomes are equally useful: answering the question from \
-the screen, or naming it as a genuine gap so it can be taken back to that person as a question \
-worth asking. You are not expected to know what was in their head -- only to report honestly what \
-the screen does and does not show, so if you are unsure, or the evidence is incomplete or simply \
-does not cover this, say so plainly and answer "unresolvable".
-</context>
-
-<scope>
-Every specific name, label, or value you write in "observed" or "inferred_text" must be legible in \
-the evidence you were given. When a plausible name comes to mind that you cannot actually read in \
-the evidence, that is the signal to answer "unresolvable". Your job is identical whether the \
-evidence is screenshots or extracted OCR text.
-</scope>
-
-<procedure>
-Work in two steps, in order.
-
-STEP 1 -- Observe. Fill in "observed" with what is literally legible in the evidence: exact labels, \
-column headers, cell contents, highlighted or selected items, tab or sheet names, button text, or \
-(for OCR input) the relevant extracted text verbatim. Write only what you can actually see or \
-read. If nothing legible relates to the question, say so plainly (e.g. "no labels or selection \
-visible relevant to this question") -- an honest empty observation is exactly the signal that leads \
-to "unresolvable" below.
-
-STEP 2 -- Decide the verdict, using ONLY what you wrote in "observed".
-</procedure>
-
-<verdicts>
-Return exactly one of three.
-
-"resolved" -- your "observed" notes contain something concrete that specifically answers the \
-question. What counts as specific enough depends on the question's family:
-- family "ambiguity" (the question asks to name or locate something -- which sheet, which column, \
-  which button): your answer must add a concrete detail that was NOT already present in the \
-  QUESTION's own wording. It is fine, and often correct, for the answer to reuse a name or word \
-  from the narration/transcript (e.g. confirming a sheet really is named what the narration called \
-  it) -- narration and screen agreeing is a real, useful resolution, not a repetition to avoid. The \
-  test is specifically against the question text, not the narration: if your draft "inferred_text" \
-  is just a paraphrase of the question itself with no new noun in it, that is NOT a resolution.
-- family "structural" (the question asks what happens between two steps that nothing narrated \
-  covers): your answer must describe something your "observed" notes actually show happening on \
-  screen -- a specific field being edited, a specific screen/tab being opened, a specific value \
-  changing -- NOT a restatement of what the surrounding steps already say in the SOP excerpt or \
-  transcript. Since nothing was ever said about this gap, ANY answer that just paraphrases the \
-  already-known narration (rather than describing a new, screen-only observation) has added no \
-  information and must be "unresolvable" instead, even if screenshots were provided.
-A resolved answer should let someone who never watched the recording go directly to the right \
-place or perform the right action with no further guessing. Put the specific answer in \
-"inferred_text", written as a short clause that could be appended after the vague text it \
-clarifies (e.g. naming the exact column header, cell reference, or tab name visible on screen), \
-not a full sentence repeating the question.
-
-"contradicted" -- your "observed" notes show something that conflicts with what was said in the \
-narration (e.g. narration claims a total updates on its own, but the observed evidence shows the \
-total unchanged after the relevant action, or shows a manual step happening instead). Put a short \
-description of what was said in "narration_version" and what was actually observed in \
-"screen_version".
-
-"unresolvable" -- your "observed" notes do not settle the question either way: nothing legible \
-relates to the specific thing being asked about, or the window doesn't cover the relevant moment. \
-This is a real result, not a failure -- it means the answer lives only in the recorder's head, \
-which is precisely what this pipeline was built to find, and the question goes back to them \
-directly. Put a short explanation of what's missing in "reason". Do NOT invent a \
-plausible-sounding answer just to avoid this verdict: a fabricated resolution is written into the \
-final document as though it had been observed, while an honest "unresolvable" becomes a question \
-someone can actually answer.
-</verdicts>
-
-<output_format>
-Respond with a JSON object with exactly these fields:
-{"observed": "<what is literally legible in the evidence, written before you decide anything>",
- "verdict": "resolved" | "contradicted" | "unresolvable",
- "inferred_text": "<short clause, only for resolved, else null>",
- "reason": "<short explanation, only for unresolvable, else empty string>",
- "narration_version": "<only for contradicted, else null>",
- "screen_version": "<only for contradicted, else null>"}
-
-Respond with only the JSON object, no other text."""
 
 
 CHECKER_EVENT_SYSTEM = """<role>

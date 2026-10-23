@@ -1,8 +1,8 @@
 """Unit tests for core/pipeline.py's Writer stage (_write_sop) -- the v2 pipeline's one FATAL
 stage. Uses the shared _FakeClient (tests/fakes.py) so no network call or API key is needed.
 
-Phase 3 note: the Writer now calls client.structured_chat(...) (LangChain-backed for OpenAI,
-JSON-mode-by-prompt for Sarvam -- see core/llm/client.py / core/llm/sarvam_client.py) instead of
+Phase 3 note: the Writer now calls client.structured_chat(...) (LangChain-backed -- see
+core/llm/client.py) instead of
 client.chat() + extract_chat_content() + a hand-rolled JSON parser. _FakeClient.structured_chat
 returns a WriterOutput object directly (or raises), so these tests build WriterOutput objects
 rather than JSON strings.

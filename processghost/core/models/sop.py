@@ -389,7 +389,7 @@ class ReviewerOutput(BaseModel):
 
 
 class CheckerOutput(BaseModel):
-    """Structured-output target for CHECKER_SYSTEM -- one call per flag. `evidence` deliberately
+    """Structured-output target for CHECKER_EVENT_SYSTEM -- one call per flag. `evidence` deliberately
     isn't asked for as a set of frame timestamps the model picks out: every frame extracted for
     the flag's window is used as evidence on a resolved/contradicted verdict (core/pipeline.py:
     _apply_resolution), which is enough to satisfy the provenance rule (>=1 evidence frame) without

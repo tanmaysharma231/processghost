@@ -74,11 +74,14 @@ def test_over_budget_follows_the_limit(monkeypatch):
     assert not m.over_budget()  # 0 disables the limit
 
 
+_STUB_TIMELINE = object()  # any non-None timeline: the budget guard trips before it is read
+
+
 def _doc_with_flags(n) -> SOPDocument:
     step = SOPStep(step_id="step-01", order=1, title="t", instruction="i",
                    attributions=[Attribution(kind="said", t_s=0.0, segment_ids=[0])])
     flags = [Flag(flag_id=f"FLAG-{i:02d}", family="ambiguity", question="q", severity="blocking",
-                  window_segment_ids=[0], step_id="step-01") for i in range(1, n + 1)]
+                  window_segment_ids=[0], step_id="step-01", event_ids=["ev-1"]) for i in range(1, n + 1)]
     return SOPDocument(run_id="r", steps=[step], flags=flags)
 
 
@@ -87,10 +90,20 @@ def test_checker_stops_starting_flags_once_over_budget(tmp_path, monkeypatch):
     client = _FakeClient()
     client.metrics.cost_usd = 5.0  # already over budget before the Checker starts
     doc = _run_checker(client, _doc_with_flags(3), [TranscriptSegment(start_s=0.0, end_s=5.0, text="x")],
-                       tmp_path / "v.mp4", tmp_path / "frames")
+                       tmp_path / "frames", timeline=_STUB_TIMELINE)
     assert {f.status for f in doc.flags} == {"unchecked"}  # never silently dropped
     assert client.structured_calls == []
     assert any(f["stage"] == "budget_exceeded" and f["meta"]["flags_not_checked"] == 3 for f in client.metrics.failures)
+
+
+def test_flag_without_screen_events_is_unchecked_not_sent_to_the_model(tmp_path):
+    client = _FakeClient()
+    doc = _doc_with_flags(2)
+    doc = doc.model_copy(update={"flags": [f.model_copy(update={"event_ids": []}) for f in doc.flags]})
+    doc = _run_checker(client, doc, [TranscriptSegment(start_s=0.0, end_s=5.0, text="x")],
+                       tmp_path / "frames", timeline=_STUB_TIMELINE)
+    assert {f.status for f in doc.flags} == {"unchecked"}
+    assert client.structured_calls == []
 
 
 # --- retention --------------------------------------------------------------------
@@ -178,8 +191,8 @@ def test_provider_calls_have_a_timeout(monkeypatch):
 
 def test_manifest_never_contains_api_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value-123")
-    monkeypatch.setenv("SARVAM_API_KEY", "sarvam-secret-value-456")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret-value-456")
     video = tmp_path / "v.mp4"
     video.write_bytes(b"abc")
     text = str(build_manifest(video))
-    assert "sk-test-secret-value-123" not in text and "sarvam-secret-value-456" not in text
+    assert "sk-test-secret-value-123" not in text and "anthropic-secret-value-456" not in text

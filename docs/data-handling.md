@@ -22,14 +22,12 @@ pipeline on a real client recording.
 
 ## What leaves the machine
 
-Sent to the model provider you configure (OpenAI by default, Sarvam optionally):
+Sent to the model provider you configure (OpenAI by default, Anthropic optionally; the audio always goes to OpenAI Whisper):
 
 - the audio (to speech-to-text);
 - the transcript, the draft steps and the flag questions (to the Writer, Reviewer and Checker);
-- on the v2 Checker path, up to 16 full frames per flag;
-- on the v3 path: OCR **text** of the screen (OCR itself runs locally), and images (a downscaled full
-  frame and crops of what changed) only on the second, escalation call, and only with the OpenAI
-  provider. With Sarvam no images are sent.
+- OCR **text** of the screen (OCR itself runs locally), and images (a downscaled full frame and
+  crops of what changed) only on the Checker's second, escalation call.
 
 - with `--workbook`: lookups into the workbook you supply. Only what a lookup returns is sent (at most
   `DATA_ROW_CAP` rows per call, each cell cut to `DATA_CELL_MAX_CHARS`, and only the columns asked for),

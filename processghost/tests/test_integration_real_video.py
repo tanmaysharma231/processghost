@@ -23,8 +23,7 @@ repair it was explicitly instructed not to make (see prompts.WRITER_SYSTEM). Tha
 bug, unlike the positive coverage question, which needs a human to judge.
 
 Explicitly forces core.config.LLM_PROVIDER = "openai" for the duration of the test (restored
-after) regardless of the module-level default -- see tests/test_integration_real_video_sarvam.py
-for the equivalent Sarvam-path test.
+after) regardless of the module-level default.
 """
 from __future__ import annotations
 

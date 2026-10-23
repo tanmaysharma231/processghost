@@ -78,23 +78,20 @@ STAGES: List[Dict[str, Any]] = [
         "status": "built",
         "short": "Audio to timed words. No reasoning, only timing and text.",
         "inputs": ["Audio extracted from the video (ffmpeg)"],
-        "outputs": ["Segments: id, start, end, text", "Word-level timestamps attached to each segment (OpenAI path)"],
-        "model": "Whisper (OpenAI) or Saaras v3 (Sarvam)",
+        "outputs": ["Segments: id, start, end, text", "Word-level timestamps attached to each segment"],
+        "model": "Whisper (OpenAI)",
         "prompts": [],
         "tree": [
-            _s("Extract audio, then transcribe with the configured provider", branches=[
-                _b("OpenAI", "Whisper with word and segment timestamps; words are attached to the segment that contains them"),
-                _b("Sarvam", "Batch speech-to-text job; chunk timings parsed into segments; no word timing"),
-            ]),
+            _s("Extract audio, then transcribe with Whisper", "Word and segment timestamps; words are attached to the segment that contains them."),
             _s("Check the timing", branches=[
                 _b("One whole-transcript segment with no timing", "Mark timing_degraded: the document says its timestamps are unreliable, and the screen path is skipped", WARN),
                 _b("Normal per-segment timing", "Continue"),
             ]),
         ],
         "failure": "Fatal. There is no document yet, so a failed transcription ends the run (the cost is recorded).",
-        "knobs": ["MODEL_WHISPER", "SARVAM_MODEL_STT"],
+        "knobs": ["MODEL_WHISPER"],
+        "issues": [],
         "measured": ["Narration can lag or lead the action by 4 to 5 seconds (docs/24), which is why word times alone cannot align speech to screen."],
-        "issues": ["The Sarvam path has never been run against the real API in this project."],
     },
     {
         "id": "writer",
@@ -106,7 +103,7 @@ STAGES: List[Dict[str, Any]] = [
         "short": "Turns the transcript into ordered steps, deliberately naive: a vague 'paste it here' stays vague.",
         "inputs": ["Every transcript segment at once (index, start, end, text)"],
         "outputs": ["SOPDocument with steps (title, instruction, 'said' attributions) and appendix segments (small talk, with a reason)"],
-        "model": "MODEL_TEXT (gpt-4o) or sarvam-105b, one call",
+        "model": "MODEL_TEXT (gpt-4o), one call",
         "prompts": ["WRITER_SYSTEM"],
         "tree": [
             _s("One model call over the whole transcript", "Whole context at once, so a step can span several segments."),
@@ -132,7 +129,7 @@ STAGES: List[Dict[str, Any]] = [
         "short": "Finds where a newcomer would get stuck, by omission: a step pair with no verified connection becomes a gap.",
         "inputs": ["Draft steps", "The full transcript"],
         "outputs": ["Transitions (what carries between steps, with a verbatim quote)", "Flags: ambiguity or structural, each with a question, severity and window"],
-        "model": "MODEL_TEXT or sarvam-105b, one call, then plain Python",
+        "model": "MODEL_TEXT, one call, then plain Python",
         "prompts": ["REVIEWER_SYSTEM"],
         "tree": [
             _s("Model: for each consecutive pair, name what carries across, with a quote copied from the transcript", "Only when it honestly can. There is no ok/broken field to self-report."),
@@ -285,7 +282,7 @@ STAGES: List[Dict[str, Any]] = [
         "short": "For every step, says what changed on screen, quoting the OCR records. Anything it cannot quote is thrown away.",
         "inputs": ["Steps with word-timed speech", "One OCR change record per screen event (chrome before/after, changed regions before/after, and when available the surface locator, change kind and speech clue)"],
         "outputs": ["Observed changes on each step ('Observed on screen: ... [observed @t]')", "Flags: unspecified questions, said-but-not-shown steps, unsupported claims, silent events"],
-        "model": "MODEL_TEXT or sarvam-105b, one call, then plain Python",
+        "model": "MODEL_TEXT, one call, then plain Python",
         "prompts": ["RECONCILER_SYSTEM"],
         "tree": [
             _s("Code: build change records by local OCR (cached by image content)", "Top and bottom strips before and after, plus the largest changed regions before and after."),
@@ -319,10 +316,10 @@ STAGES: List[Dict[str, Any]] = [
         "kind": "llm",
         "status": "partial",
         "short": "Resolves each open flag against the screen. Writes down what it saw before deciding, and 'unresolvable' is a valid answer.",
-        "inputs": ["Open flags, most severe first", "Screen events attached to each flag (v3) or video frames (v2 path)"],
+        "inputs": ["Open flags, most severe first", "Screen events attached to each flag"],
         "outputs": ["A verdict per flag: resolved, contradicted or unresolvable", "Inferred clauses on steps, or new inferred steps"],
-        "model": "MODEL_VISION (gpt-4o-mini) for images, MODEL_TEXT for text-only; or sarvam-105b over OCR text",
-        "prompts": ["CHECKER_EVENT_SYSTEM", "CHECKER_SYSTEM"],
+        "model": "MODEL_VISION (gpt-4o-mini) for images, MODEL_TEXT for text-only",
+        "prompts": ["CHECKER_EVENT_SYSTEM"],
         "tree": [
             _s("Select flags", branches=[
                 _b("Status is open, sorted blocking first; first MAX_CHECKED_FLAGS", "Check them"),
@@ -330,8 +327,8 @@ STAGES: List[Dict[str, Any]] = [
                 _b("Estimated spend reaches MAX_RUN_COST_USD", "Stop starting new flags; the rest are marked unchecked", WARN),
             ]),
             _s("Per flag: choose the evidence path", branches=[
-                _b("Flag has attached screen events (v3)", "Event path (below)"),
-                _b("No events", "v2 path: extract up to CHECKER_MAX_FRAMES_PER_FLAG frames from the flag's window; OpenAI sends them to a vision model, Sarvam OCRs them in one batch then reasons over text"),
+                _b("Flag has attached screen events", "Event path (below)"),
+                _b("No events, or no screen timeline", "Marked unchecked: there is no evidence to check it against, so no model call is made", WARN),
             ]),
             _s("Event path, level 0: nearest event, OCR text, text model", "Evidence: full downscaled frame, numbered before/after tiles, OCR of chrome and regions."),
             _s("Read the verdict", branches=[
@@ -348,7 +345,7 @@ STAGES: List[Dict[str, Any]] = [
             ]),
         ],
         "failure": "Non-fatal per flag. One failed call marks that flag check_failed and the run continues.",
-        "knobs": ["MAX_CHECKED_FLAGS", "CHECKER_MAX_FRAMES_PER_FLAG", "CHECKER_FRAME_INTERVAL_S", "SCREEN_EVIDENCE_FULL_WIDTH", "SCREEN_EVIDENCE_MAX_IMAGES", "SCREEN_ESCALATION_EVENTS", "CHECKER_ECHO_MAX", "MAX_RUN_COST_USD", "MODEL_VISION"],
+        "knobs": ["MAX_CHECKED_FLAGS", "SCREEN_EVIDENCE_FULL_WIDTH", "SCREEN_EVIDENCE_MAX_IMAGES", "SCREEN_ESCALATION_EVENTS", "CHECKER_ECHO_MAX", "MAX_RUN_COST_USD", "MODEL_VISION"],
         "measured": [
             "v2 on 5 real runs: 68% of sampled frame-to-frame differences were tiny; 15 of 38 flags failed on rate limits; about $0.04 to $0.06 per flag.",
             "v2 'observed' text often restated the prompt: mean echo score 0.34 (resolved), 0.54 (unresolvable).",

@@ -47,7 +47,7 @@ def test_no_prompt_contains_scenario_specifics():
 def test_prompt_names_cover_the_known_v2_trio():
     """Guards against _prompt_names() silently finding zero prompts (e.g. a naming convention
     change) and the scenario-leak test above passing vacuously."""
-    assert {"WRITER_SYSTEM", "REVIEWER_SYSTEM", "CHECKER_SYSTEM"} <= set(_prompt_names())
+    assert {"WRITER_SYSTEM", "REVIEWER_SYSTEM", "CHECKER_EVENT_SYSTEM"} <= set(_prompt_names())
 
 
 # Spreadsheet function names are vocabulary of the formula evaluator, not scenario facts.

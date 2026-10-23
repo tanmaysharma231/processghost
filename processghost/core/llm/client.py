@@ -83,8 +83,8 @@ class Metrics:
         cost_usd_override: Optional[float] = None,
     ) -> None:
         """cost_usd_override is for calls priced by something other than prompt/completion tokens
-        (Whisper: per-minute of audio; Sarvam OCR: per-page) -- the caller computes it from
-        config.WHISPER_COST_PER_MINUTE / config.SARVAM_OCR_COST_PER_PAGE and passes it directly,
+        (Whisper: per-minute of audio) -- the caller computes it from
+        config.WHISPER_COST_PER_MINUTE and passes it directly,
         since estimate_cost_usd's token-rate table has no meaningful answer for those. Token-based
         calls (the large majority -- every Writer/Reviewer/Checker call) leave this None and get
         cost computed automatically, which is the whole point: it can't be forgotten if nothing
@@ -123,7 +123,7 @@ class Metrics:
         """Write the actual structured output of a Writer/Reviewer/Checker call to the trace, as
         its own line -- separate from add()'s "call" event so cost/token accounting can never be
         duplicated by a caller that (re)records a payload. Both structured_chat implementations
-        (core/llm/client.py: LLMClient, core/llm/sarvam_client.py: SarvamClient) call this right
+        (core/llm/client.py: LLMClient, core/llm/anthropic_client.py: AnthropicClient) call this right
         after the model's output validates against its schema, passing `payload.model_dump()`.
 
         This is what turns trace.jsonl from "a Checker call finished, 9s, $0.05" into "here is
@@ -279,7 +279,7 @@ class LLMClient:
         `payload_extra` merges into that recorded payload without touching `schema`'s own shape --
         for the Checker, the caller has a flag_id CheckerOutput itself doesn't carry (it's a
         per-flag call; the flag is known by the caller, not part of what the model was asked to
-        return), so `_check_one_flag` (core/pipeline.py) passes `{"flag_id": flag.flag_id}` here
+        return), so `_check_flag_with_events` (core/pipeline.py) passes `{"flag_id": flag.flag_id}` here
         purely so a live trace consumer can tell which flag a given payload resolved.
         """
         model_name = model or (config.MODEL_VISION if images else config.MODEL_TEXT)

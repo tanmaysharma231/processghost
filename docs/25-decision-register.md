@@ -87,15 +87,13 @@ A recording comes in. Anything unusable is refused before money is spent.
 
 Audio to timed words. No reasoning, only timing and text.
 
-- Kind: CODE | Status: built | Model: Whisper (OpenAI) or Saaras v3 (Sarvam)
+- Kind: CODE | Status: built | Model: Whisper (OpenAI)
 - Takes in: Audio extracted from the video (ffmpeg)
-- Produces: Segments: id, start, end, text; Word-level timestamps attached to each segment (OpenAI path)
+- Produces: Segments: id, start, end, text; Word-level timestamps attached to each segment
 
 **Decision tree**
 
-1. Extract audio, then transcribe with the configured provider
-   - IF OpenAI -> Whisper with word and segment timestamps; words are attached to the segment that contains them
-   - IF Sarvam -> Batch speech-to-text job; chunk timings parsed into segments; no word timing
+1. Extract audio, then transcribe with Whisper _Word and segment timestamps; words are attached to the segment that contains them._
 2. Check the timing
    - IF One whole-transcript segment with no timing -> Mark timing_degraded: the document says its timestamps are unreliable, and the screen path is skipped (degrades)
    - IF Normal per-segment timing -> Continue
@@ -107,21 +105,16 @@ Audio to timed words. No reasoning, only timing and text.
 | Setting | Value |
 |---|---|
 | `MODEL_WHISPER` | `whisper-1` |
-| `SARVAM_MODEL_STT` | `saaras:v3` |
 
 **Measured**
 
 - Narration can lag or lead the action by 4 to 5 seconds (docs/24), which is why word times alone cannot align speech to screen.
 
-**Known issues**
-
-- The Sarvam path has never been run against the real API in this project.
-
 ### 1 - Writer
 
 Turns the transcript into ordered steps, deliberately naive: a vague 'paste it here' stays vague.
 
-- Kind: LLM | Status: built | Model: MODEL_TEXT (gpt-4o) or sarvam-105b, one call
+- Kind: LLM | Status: built | Model: MODEL_TEXT (gpt-4o), one call
 - Takes in: Every transcript segment at once (index, start, end, text)
 - Produces: SOPDocument with steps (title, instruction, 'said' attributions) and appendix segments (small talk, with a reason)
 - Prompt: `WRITER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
@@ -154,7 +147,7 @@ Turns the transcript into ordered steps, deliberately naive: a vague 'paste it h
 
 Finds where a newcomer would get stuck, by omission: a step pair with no verified connection becomes a gap.
 
-- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT or sarvam-105b, one call, then plain Python
+- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT, one call, then plain Python
 - Takes in: Draft steps; The full transcript
 - Produces: Transitions (what carries between steps, with a verbatim quote); Flags: ambiguity or structural, each with a question, severity and window
 - Prompt: `REVIEWER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
@@ -358,7 +351,7 @@ Attaches screen events to flags. Also the fallback silent-step detector if the R
 
 For every step, says what changed on screen, quoting the OCR records. Anything it cannot quote is thrown away.
 
-- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT or sarvam-105b, one call, then plain Python | Runs only with `--screen`
+- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT, one call, then plain Python | Runs only with `--screen`
 - Takes in: Steps with word-timed speech; One OCR change record per screen event (chrome before/after, changed regions before/after, and when available the surface locator, change kind and speech clue)
 - Produces: Observed changes on each step ('Observed on screen: ... [observed @t]'); Flags: unspecified questions, said-but-not-shown steps, unsupported claims, silent events
 - Prompt: `RECONCILER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
@@ -405,10 +398,10 @@ For every step, says what changed on screen, quoting the OCR records. Anything i
 
 Resolves each open flag against the screen. Writes down what it saw before deciding, and 'unresolvable' is a valid answer.
 
-- Kind: LLM | Status: partial | Model: MODEL_VISION (gpt-4o-mini) for images, MODEL_TEXT for text-only; or sarvam-105b over OCR text
-- Takes in: Open flags, most severe first; Screen events attached to each flag (v3) or video frames (v2 path)
+- Kind: LLM | Status: partial | Model: MODEL_VISION (gpt-4o-mini) for images, MODEL_TEXT for text-only
+- Takes in: Open flags, most severe first; Screen events attached to each flag
 - Produces: A verdict per flag: resolved, contradicted or unresolvable; Inferred clauses on steps, or new inferred steps
-- Prompt: `CHECKER_EVENT_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer), `CHECKER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
+- Prompt: `CHECKER_EVENT_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
 
 **Decision tree**
 
@@ -417,8 +410,8 @@ Resolves each open flag against the screen. Writes down what it saw before decid
    - IF Beyond MAX_CHECKED_FLAGS -> Marked unchecked, never dropped (degrades)
    - IF Estimated spend reaches MAX_RUN_COST_USD -> Stop starting new flags; the rest are marked unchecked (degrades)
 2. Per flag: choose the evidence path
-   - IF Flag has attached screen events (v3) -> Event path (below)
-   - IF No events -> v2 path: extract up to CHECKER_MAX_FRAMES_PER_FLAG frames from the flag's window; OpenAI sends them to a vision model, Sarvam OCRs them in one batch then reasons over text
+   - IF Flag has attached screen events -> Event path (below)
+   - IF No events, or no screen timeline -> Marked unchecked: there is no evidence to check it against, so no model call is made (degrades)
 3. Event path, level 0: nearest event, OCR text, text model _Evidence: full downscaled frame, numbered before/after tiles, OCR of chrome and regions._
 4. Read the verdict
    - IF resolved or contradicted -> Apply it
@@ -438,8 +431,6 @@ Resolves each open flag against the screen. Writes down what it saw before decid
 | Setting | Value |
 |---|---|
 | `MAX_CHECKED_FLAGS` | `20` |
-| `CHECKER_MAX_FRAMES_PER_FLAG` | `16` |
-| `CHECKER_FRAME_INTERVAL_S` | `0.5` |
 | `SCREEN_EVIDENCE_FULL_WIDTH` | `1024` |
 | `SCREEN_EVIDENCE_MAX_IMAGES` | `6` |
 | `SCREEN_ESCALATION_EVENTS` | `2` |

@@ -65,7 +65,7 @@ def test_usage_is_priced_from_the_claude_table():
     client.structured_chat("sys", "user", Answer, stage="writer")
     expected = 1000 / 1e6 * 2.00 + 200 / 1e6 * 10.00
     assert client.metrics.cost_usd == pytest.approx(expected)
-    assert client.metrics.records[0]["model"] == "claude-sonnet-5-5" and "pricing" not in client.metrics.records[0].get("meta", {})
+    assert client.metrics.records[0]["model"] == config.ANTHROPIC_MODEL_TEXT and "pricing" not in client.metrics.records[0].get("meta", {})
 
 
 def test_second_identical_call_is_served_from_the_cache_for_free():

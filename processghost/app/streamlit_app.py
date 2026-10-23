@@ -3,7 +3,7 @@ the pipeline actually runs in a background thread-- a growing list of expanders,
 Writer/Reviewer/Checker call, populated with that call's real output the moment it lands in
 runs/<run_id>/trace.jsonl. This is a pure disk-polling design: no changes to run_pipeline's
 signature or return contract. What makes it possible is core/llm/client.py: Metrics.record_payload
-(and its SarvamClient mirror) writing the actual structured output to the trace, not just
+writing the actual structured output to the trace, not just
 cost/latency metadata -- see docs/18-known-gaps-v2.md.
 
 Supersedes the old "kept intentionally minimal, no UI work before Phase 5" viewer -- that

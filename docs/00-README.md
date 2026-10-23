@@ -40,7 +40,7 @@ Recorded here because they shape every document below and were made explicitly, 
 | Doc | Hook |
 |---|---|
 | `12-real-scenario-target.md` | The acceptance target, grounded in the real files at `data/` and a real verified pipeline run: exactly which steps the narration states, which six things it never says (and why each one matters, using the workbook's real formulas and real garbled transaction strings), and what the SOP-synthesis stage's output must contain to be considered correct. |
-| `13-current-logic-and-architecture.md` | Full snapshot of the v1 two-parallel-token-stream architecture (intent/action tokens, keyword+time aligner, six-rule dissonance engine) and the OpenAI->Sarvam provider migration. **Describes an architecture superseded by the section below, and since fully removed** -- kept as the as-is reference `14` explains the departure from. `core/align/`/`core/rules/` were deleted once the Checker (Phase 3) replaced them end-to-end; they no longer exist on disk. |
+| `13-current-logic-and-architecture.md` | Full snapshot of the v1 two-parallel-token-stream architecture (intent/action tokens, keyword+time aligner, six-rule dissonance engine) and the OpenAI->Sarvam provider migration (the Sarvam provider was removed on 2026-10-23). **Describes an architecture superseded by the section below, and since fully removed** -- kept as the as-is reference `14` explains the departure from. `core/align/`/`core/rules/` were deleted once the Checker (Phase 3) replaced them end-to-end; they no longer exist on disk. |
 
 ### v2: Writer / Reviewer / Checker / Triage (**complete** as of 2026-08-29)
 

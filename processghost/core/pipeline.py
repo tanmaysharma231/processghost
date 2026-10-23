@@ -3,7 +3,7 @@
 v2 design: see Process_ghost/processghost-v2-writer-reviewer-checker-plan.md and
 docs/14-writer-reviewer-checker.md. `run_pipeline`: transcript -> one LLM call (Writer) -> a
 validated SOPDocument -> one LLM call (Reviewer, transitions/flags merged in) -> per-flag Checker
-calls (frames/OCR text -> resolutions merged back in) -> sop.md. The Writer is the one FATAL stage
+calls (screen-event evidence -> resolutions merged back in) -> sop.md. The Writer is the one FATAL stage
 -- unlike every other LLM call site here, it has no per-item fallback, because there is no
 meaningful document to fall back to; on any failure (WriterFailedError) the run aborts, after
 recording the failure on the run's metrics. The Reviewer is non-fatal: on any failure it ships the
@@ -14,14 +14,11 @@ The v1 pipeline (core/align/, core/rules/, the intent/action/cross-check prompts
 deleted once the Checker replaced it end-to-end -- see git history for that code if it's ever
 needed for reference.
 
-Provider switch (config.LLM_PROVIDER): "openai" uses Whisper + LangChain's ChatOpenAI (see
-core/llm/client.py: structured_chat) for Writer/Reviewer/Checker reasoning, real vision per Checker
-call. "sarvam" uses Saaras v3 (batch STT) + Sarvam-105B, with no true vision model -- the Checker's
-Sarvam path OCRs every checked flag's frames in ONE batched document-intelligence job first, then
-reasons over the extracted text per flag -- see core/llm/sarvam_client.py for the full reasoning
-and what's confirmed vs. best-effort in that design. Both providers converge on the same
-segments_raw shape after transcription and the same structured_chat(...) -> BaseModel interface
-for every reasoning call, so _write_sop/_review_sop/_run_checker are provider-agnostic.
+Provider switch (config.LLM_PROVIDER): "openai" (default) uses LangChain's ChatOpenAI and
+"anthropic" uses ChatAnthropic (see core/llm/client.py and core/llm/anthropic_client.py:
+structured_chat) for Writer/Reviewer/Checker reasoning. Transcription is always OpenAI Whisper --
+Claude has no speech-to-text. Both providers expose the same structured_chat(...) -> BaseModel
+interface, so _write_sop/_review_sop/_run_checker are provider-agnostic.
 """
 from __future__ import annotations
 
@@ -29,7 +26,7 @@ import json
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 from core import config
 from core.io import storage
@@ -43,9 +40,7 @@ from core.llm import prompts
 from core.llm.parsing import (
     build_sop_from_writer_output,
     merge_reviewer_output,
-    parse_sarvam_stt_result,
 )
-from core.llm.sarvam_client import SarvamClient
 from core.models.sop import (
     Attribution,
     CheckerOutput,
@@ -101,22 +96,15 @@ from report.flow import write_flow
 def _make_client(metrics: Metrics):
     """Provider factory -- the only place run_pipeline branches on config.LLM_PROVIDER for client
     construction. Both client types expose a compatible .structured_chat(system_prompt, user_text,
-    schema, images=None) -> BaseModel and a .metrics attribute (Phase 3: LangChain for OpenAI,
-    JSON-mode-by-prompt for Sarvam -- see core/llm/client.py and core/llm/sarvam_client.py), so
+    schema, images=None) -> BaseModel and a .metrics attribute, so
     _write_sop/_review_sop/the Checker work unchanged regardless of which one is active."""
-    if config.LLM_PROVIDER == "sarvam":
-        return SarvamClient(metrics=metrics)
     if config.LLM_PROVIDER == "anthropic":
         return AnthropicClient(metrics=metrics)
     return LLMClient(metrics=metrics)
 
 
 def _transcribe(client, audio_path: Path) -> list[dict]:
-    """Transcription -- shape differs by provider, both converge on segments_raw:
-    list[{"id", "start", "end", "text"}], so everything after this is provider-agnostic."""
-    if config.LLM_PROVIDER == "sarvam":
-        stt_result = client.transcribe(audio_path)
-        return parse_sarvam_stt_result(stt_result)
+    """Transcription (OpenAI Whisper) -> segments_raw: list[{"id", "start", "end", "text"}]."""
     transcript_resp = client.transcribe(audio_path)
     segments = transcript_resp.get("segments", [])
     _attach_words(segments, transcript_resp.get("words") or [])
@@ -126,7 +114,7 @@ def _transcribe(client, audio_path: Path) -> list[dict]:
 def _attach_words(segments: list[dict], words: list[dict]) -> None:
     """Give each segment the words spoken inside it (`{"word", "start", "end"}`), so later stages can
     tell WHEN each word was said, not just which sentence. Words with no containing segment attach to
-    the nearest earlier one. Segments are mutated in place; no words (Sarvam path, older cache) leaves
+    the nearest earlier one. Segments are mutated in place; no words (older cache) leaves
     them as they were."""
     if not words or not segments:
         return
@@ -347,61 +335,6 @@ def _apply_resolution(doc: SOPDocument, flag: Flag, output: CheckerOutput, frame
     return doc.model_copy(update={"steps": steps, "flags": flags, "resolutions": doc.resolutions + [resolution]})
 
 
-def _check_one_flag(
-    client,
-    doc: SOPDocument,
-    flag: Flag,
-    transcript: List[TranscriptSegment],
-    frame_paths: List[Path],
-    ocr_text_by_frame: Dict[str, str],
-) -> SOPDocument:
-    """Resolve one flag: one structured_chat call (see prompts.CHECKER_SYSTEM), images for OpenAI
-    or OCR text for Sarvam (no true vision model -- see core/llm/sarvam_client.py). On ANY failure
-    -- no frames/OCR text available, the call itself, output that doesn't validate -- the flag gets
-    status="check_failed" and the run continues; a single flag's failure never aborts the run."""
-    try:
-        user_text = str(
-            {
-                "question": flag.question,
-                "family": flag.family,
-                "step_excerpt": _flag_step_excerpt(doc, flag),
-                "transcript_excerpt": _flag_transcript_excerpt(flag, transcript),
-            }
-        )
-        if config.LLM_PROVIDER == "sarvam":
-            ocr_text = "\n\n".join(
-                ocr_text_by_frame[fp.name] for fp in frame_paths if ocr_text_by_frame.get(fp.name)
-            )
-            if not ocr_text:
-                raise RuntimeError("no OCR text available for this flag's frames")
-            output = client.structured_chat(
-                prompts.CHECKER_SYSTEM,
-                user_text + "\n\nExtracted screen text:\n" + ocr_text,
-                CheckerOutput,
-                stage="checker",
-                payload_extra={"flag_id": flag.flag_id},
-            )
-        else:
-            if not frame_paths:
-                raise RuntimeError("no frames extracted for this flag's window")
-            output = client.structured_chat(
-                prompts.CHECKER_SYSTEM,
-                user_text,
-                CheckerOutput,
-                images=frame_paths,
-                stage="checker",
-                payload_extra={"flag_id": flag.flag_id},
-            )
-        return _apply_resolution(doc, flag, output, frame_paths)
-    except Exception as exc:  # noqa: BLE001 - one flag's failure must degrade, not fail the run
-        client.metrics.record_failure("checker", str(exc), meta={"flag_id": flag.flag_id})
-        flags = [
-            f.model_copy(update={"status": "check_failed"}) if f.flag_id == flag.flag_id else f
-            for f in doc.flags
-        ]
-        return doc.model_copy(update={"flags": flags})
-
-
 def _stamp_flag(doc: SOPDocument, flag_id: str, tier: str, level: int) -> SOPDocument:
     flags = [
         f.model_copy(update={"checker_tier": tier, "expansion_level": level}) if f.flag_id == flag_id else f
@@ -439,9 +372,9 @@ def _check_flag_with_events(
 ) -> SOPDocument:
     """v3 Checker path (docs/22): evidence is built from the screen events attached to the flag
     instead of fixed-interval frames. Level 0 sends the nearest event as OCR text + a text model;
-    if that is unresolvable, level 1 widens to +/-SCREEN_ESCALATION_EVENTS events and (OpenAI only,
-    Sarvam has no vision model) attaches the images. At most 2 calls per flag, and the model never
-    decides how much context it gets. Same failure contract as _check_one_flag."""
+    if that is unresolvable, level 1 widens to +/-SCREEN_ESCALATION_EVENTS events and attaches the images. At most 2 calls per flag, and the model never
+    decides how much context it gets. On ANY failure the flag gets
+    status="check_failed" and the run continues; a single flag's failure never aborts the run."""
     try:
         w0, w1 = _flag_window_s(flag, doc, transcript)
         context = {
@@ -461,7 +394,7 @@ def _check_flag_with_events(
             )
             if not pack.after_frames:
                 raise RuntimeError("no readable keyframes for this flag's events")
-            use_images = level == 1 and config.LLM_PROVIDER != "sarvam" and bool(pack.images)
+            use_images = level == 1 and bool(pack.images)
             tier = "vision" if use_images else "ocr"
             user_text = (
                 prompt_text
@@ -495,61 +428,25 @@ def _run_checker(
     client,
     doc: SOPDocument,
     transcript: List[TranscriptSegment],
-    video_path: Path,
     checker_frames_dir: Path,
     timeline=None,
     timeline_dir: Optional[Path] = None,
     ocr=None,
     skip_slots: Tuple[str, ...] = (),
 ) -> SOPDocument:
-    """Phase 3: resolve every open flag, severity-first, up to MAX_CHECKED_FLAGS. Frame extraction
-    reuses core/io/video.py: extract_frames_window as-is -- it already handles cross-flag frame
-    sharing (filename-based dedupe in one flat out_dir) and grid quantization, so overlapping
-    windows cost nothing extra here. Sarvam batches every checked flag's frames into ONE
-    document-intelligence job before the per-flag loop (see SarvamClient.ocr_extract_frames) --
-    job-based OCR has real per-job latency, so one job per flag would be unacceptable; OpenAI skips
-    this and sends real frames per call instead.
+    """Phase 3: resolve every open flag, severity-first, up to MAX_CHECKED_FLAGS. A flag is checked
+    from the screen events attached to it (_check_flag_with_events). A flag with no screen events,
+    or any flag when there is no screen timeline, has no evidence to check against and is marked
+    status="unchecked" -- never silently dropped.
     """
     checked, unchecked = _select_flags_for_check(doc, skip_slots)
     if not checked and not unchecked:
         return doc
 
     checker_frames_dir.mkdir(parents=True, exist_ok=True)
-    # v3: a flag with screen events attached is checked from event evidence (no frame extraction, no
-    # OCR batch); every other flag takes the unchanged v2 path below.
-    event_flag_ids = {f.flag_id for f in checked if timeline is not None and f.event_ids}
-    frames_by_flag: Dict[str, List[Path]] = {}
-    for flag in (f for f in checked if f.flag_id not in event_flag_ids):
-        start_s, end_s = _flag_window_s(flag, doc, transcript)
-        try:
-            extracted = video_io.extract_frames_window(
-                video_path,
-                checker_frames_dir,
-                start_s,
-                end_s,
-                interval_s=config.CHECKER_FRAME_INTERVAL_S,
-                max_frames=config.CHECKER_MAX_FRAMES_PER_FLAG,
-            )
-            frames_by_flag[flag.flag_id] = [ef.path for ef in extracted]
-        except Exception as exc:  # noqa: BLE001 - one flag's extraction failing shouldn't block the rest
-            client.metrics.record_failure("checker_extract", str(exc), meta={"flag_id": flag.flag_id})
-            frames_by_flag[flag.flag_id] = []
-
-    ocr_text_by_frame: Dict[str, str] = {}
-    if config.LLM_PROVIDER == "sarvam":
-        seen: set[str] = set()
-        all_frames: List[Path] = []
-        for flag in (f for f in checked if f.flag_id not in event_flag_ids):
-            for fp in frames_by_flag.get(flag.flag_id, []):
-                if fp.name not in seen:
-                    seen.add(fp.name)
-                    all_frames.append(fp)
-        batch = video_io.subsample_evenly(all_frames, config.CHECKER_MAX_OCR_FRAMES)
-        if batch:
-            try:
-                ocr_text_by_frame = client.ocr_extract_frames(batch, workdir=checker_frames_dir)
-            except Exception as exc:  # noqa: BLE001 - whole OCR batch failing shouldn't block extraction results
-                client.metrics.record_failure("checker_ocr", str(exc), meta={"frame_count": len(batch)})
+    no_events = [f for f in checked if timeline is None or not f.event_ids]
+    checked = [f for f in checked if f not in no_events]
+    unchecked = no_events + list(unchecked)
 
     for i, flag in enumerate(checked):
         if client.metrics.over_budget():
@@ -561,12 +458,9 @@ def _run_checker(
             )
             unchecked = list(checked[i:]) + list(unchecked)
             break
-        if flag.flag_id in event_flag_ids:
-            doc = _check_flag_with_events(
-                client, doc, flag, transcript, timeline, timeline_dir, checker_frames_dir / "events", ocr
-            )
-        else:
-            doc = _check_one_flag(client, doc, flag, transcript, frames_by_flag.get(flag.flag_id, []), ocr_text_by_frame)
+        doc = _check_flag_with_events(
+            client, doc, flag, transcript, timeline, timeline_dir, checker_frames_dir / "events", ocr
+        )
 
     if unchecked:
         unchecked_ids = {f.flag_id for f in unchecked}
@@ -808,8 +702,8 @@ def run_pipeline(
             for seg in segments_raw
         ]
 
-        # Degraded-STT guard: parse_sarvam_stt_result falls back to a single segment spanning the
-        # whole transcript (start=0.0, end=0.0) when per-chunk timing is unavailable. Every
+        # Degraded-STT guard: a single segment spanning the whole transcript (start=0.0,
+        # end=0.0) means per-chunk timing is unavailable. Every
         # [said @t] in the eventual doc would then read "@0:00" -- record it once here so the
         # provenance rule fails loudly (via the timing_degraded banner) rather than shipping a
         # document full of fake attributions.
@@ -869,7 +763,7 @@ def run_pipeline(
         checker_frames_dir = run_dir / "checker_frames"
         with metrics.stage("checker"):
             sop = _run_checker(
-                client, sop, transcript, local_video, checker_frames_dir,
+                client, sop, transcript, checker_frames_dir,
                 timeline=timeline, timeline_dir=run_dir / "screen", ocr=get_ocr() if timeline is not None else None,
                 # With a workbook, how a row is picked and what else reads a cell are answered from the file, not guessed from pixels.
                 skip_slots=("key", "effect") if workbook is not None else (),

@@ -32,7 +32,7 @@ class LLMResponseParseError(ValueError):
 
 def build_sop_from_writer_output(output: WriterOutput, run_id: str, segments: List[dict]) -> SOPDocument:
     """Turn a validated WriterOutput (core/models/sop.py; produced by
-    LLMClient/SarvamClient.structured_chat -- see core/llm/client.py) into a SOPDocument.
+    LLMClient/AnthropicClient.structured_chat -- see core/llm/client.py) into a SOPDocument.
 
     Shape validation is pydantic's job now (WriterOutput's schema), done before this function is
     even called. What's left here is the one business rule shape validation can't express: every
@@ -246,48 +246,3 @@ def _bounding_segment_ids(ordered_steps: List[SOPStep], from_id: str, to_id: str
     if after and after.attributions:
         ids.extend(after.attributions[0].segment_ids[:1])
     return ids
-
-
-def parse_sarvam_stt_result(result: dict) -> List[dict]:
-    """Convert a Sarvam speech-to-text batch job's result dict into the same segments_raw shape
-    (list of {"id", "start", "end", "text"}) Whisper's `segments` list already provides -- so
-    everything downstream (TranscriptSegment construction, _extract_intents_from_transcript) needs
-    no changes regardless of which provider produced the transcript.
-
-    Expected input shape (per docs.sarvam.ai; NOT independently confirmed against a real response,
-    see core/llm/sarvam_client.py's module docstring):
-        {"transcript": "...", "timestamps": {"chunks": [...], "start_time_seconds": [...],
-         "end_time_seconds": [...]}, ...}
-    Parallel arrays, one entry per sentence/phrase chunk. If "timestamps" is missing or the arrays
-    are inconsistent length, falls back to a single segment covering the whole transcript at t=0
-    (still usable, just without sub-segment timing) rather than raising -- a transcript with worse
-    timing beats no transcript at all.
-    """
-    transcript_text = result.get("transcript") or ""
-    timestamps = result.get("timestamps") or {}
-    chunks = timestamps.get("chunks")
-    starts = timestamps.get("start_time_seconds")
-    ends = timestamps.get("end_time_seconds")
-
-    if (
-        isinstance(chunks, list)
-        and isinstance(starts, list)
-        and isinstance(ends, list)
-        and len(chunks) == len(starts) == len(ends)
-        and len(chunks) > 0
-    ):
-        return [
-            {"id": i, "start": float(starts[i]), "end": float(ends[i]), "text": chunks[i]}
-            for i in range(len(chunks))
-        ]
-
-    # No usable per-chunk timing -- one segment spanning the whole transcript.
-    return [{"id": 0, "start": 0.0, "end": 0.0, "text": transcript_text}]
-
-
-def extract_chat_content(response: dict) -> str:
-    """Pull the assistant message text out of a raw OpenAI chat/vision completion dict."""
-    try:
-        return response["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise LLMResponseParseError(f"Response missing choices[0].message.content: {exc}") from exc

@@ -29,4 +29,3 @@ jobs:
         run: python -m pytest tests -q
         env:
           OPENAI_API_KEY: ""
-          SARVAM_API_KEY: ""

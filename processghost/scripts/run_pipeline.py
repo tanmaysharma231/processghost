@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--screen", action="store_true", help="enable the v3 screen timeline, Align and event-evidence Checker")
     parser.add_argument("--no-reconcile", action="store_true", help="with --screen: skip the Reconciler and use Align's counting heuristic (for comparison)")
     parser.add_argument("--workbook", type=Path, default=None, help="the workbook the person worked in: enables the read-only document rung (questions the video left open are checked against it)")
-    parser.add_argument("--provider", default="openai", choices=["openai", "sarvam", "anthropic"])
+    parser.add_argument("--provider", default="openai", choices=["openai", "anthropic"])
     parser.add_argument("--no-cache", action="store_true", help="ignore and do not write the model-call cache")
     parser.add_argument("--no-keep-media", action="store_true", help="delete the run's video copy, audio and frames when it ends")
     parser.add_argument("--max-cost", type=float, default=None, help="soft per-run budget in USD (default: config.MAX_RUN_COST_USD)")

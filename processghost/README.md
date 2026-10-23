@@ -26,8 +26,7 @@ verified test case this pipeline is validated against (not optimized for) --
   "automatically" claims) over every step. Degrades instead of failing the run: a failed call sets
   `review_failed=True` and ships the Writer's document with zero flags.
 - **Checker** (per flag: frames -> resolution, one LLM call per flag): resolves each flag against
-  video frames (OpenAI: real vision, per call) or OCR text (Sarvam: one batched OCR job across all
-  checked flags, then a text call per flag). Verdicts: `resolved`, `contradicted`, or
+  the screen events attached to it (OCR text first, images only on the escalation call). Verdicts: `resolved`, `contradicted`, or
   `unresolvable` -- an `unresolvable` verdict is a real, useful result, not a failure: it means the
   answer lives only in the recorder's head, which becomes a question in the final document rather
   than a guess. A failed call marks that one flag `check_failed`; the run continues.
@@ -51,9 +50,9 @@ verified test case this pipeline is validated against (not optimized for) --
    your OS's package manager. Any test that shells out to either binary is skipped automatically if
    it isn't found.
 2. Set environment variables: copy `.env.example` to `.env` and add the key for whichever provider
-   you're using. `core/config.py: LLM_PROVIDER` defaults to `"sarvam"` (needs `SARVAM_API_KEY`);
-   set it to `"openai"` to use `OPENAI_API_KEY` instead. Only the active provider's key is
-   required at runtime.
+   you're using. `core/config.py: LLM_PROVIDER` defaults to `"openai"` (needs `OPENAI_API_KEY`);
+   set it to `"anthropic"` to reason with Claude (needs `ANTHROPIC_API_KEY`). Transcription is
+   always OpenAI Whisper, so `OPENAI_API_KEY` is required either way.
 3. Run the Streamlit UI:
    ```bash
    streamlit run app/streamlit_app.py
@@ -74,7 +73,7 @@ processghost/
   app/streamlit_app.py        # UI
   core/
     io/                       # video/audio extraction, storage, image encoding
-    llm/                      # LLMClient (OpenAI/LangChain) + SarvamClient + prompts + parsing
+    llm/                      # LLMClient (OpenAI/LangChain) + AnthropicClient + prompts + parsing
     screen/                   # screen timeline, surfaces, classes, anchors, cell trail, Reconciler, investigations
     data/                     # workbook profile, read-only tools, facts, answers, claim guard, match check, repeat detection
     slots.py, ladder.py       # the four slots of a data step; the video -> document -> person ladder
@@ -95,26 +94,20 @@ processghost/
 
 ## Logging and traces
 - Every LLM/OCR/transcription call writes one line to `runs/<run_id>/trace.jsonl` immediately
-  (crash-safe), tagged with stage (`writer`/`reviewer`/`checker`/`transcribe`/
-  `checker_ocr_batch`), token counts, real cost (`core/config.py: PRICING_PER_1M_TOKENS`,
-  `WHISPER_COST_PER_MINUTE`, `SARVAM_OCR_COST_PER_PAGE`), and latency.
+  (crash-safe), tagged with stage (`writer`/`reviewer`/`checker`/`transcribe`), token counts, real cost
+  (`core/config.py: PRICING_PER_1M_TOKENS`, `WHISPER_COST_PER_MINUTE`), and latency.
 - `runs/<run_id>/run.json` records the run's metrics and file paths.
 - `runs/<run_id>/sop_draft.md` (Writer + Reviewer only, pre-Checker) and `sop.md` (final) are both
   kept, giving a free before/after diff of what the Checker changed.
 
 ## Constraints & Defaults
-- Dual provider: `core/config.py: LLM_PROVIDER` (`"openai"` or `"sarvam"`, default `"sarvam"`).
-  OpenAI uses LangChain's `ChatOpenAI` + `with_structured_output` for every reasoning call and the
-  raw SDK for Whisper transcription. Sarvam has no true vision model -- the Checker's OpenAI path
-  sends real frames per call, the Sarvam path runs one batched OCR job across all checked flags'
-  frames first, then reasons over the extracted text per flag.
+- Dual provider: `core/config.py: LLM_PROVIDER` (`"openai"` or `"anthropic"`, default `"openai"`).
+  Both use LangChain (`ChatOpenAI` / `ChatAnthropic`) + `with_structured_output` for every
+  reasoning call; transcription is the raw OpenAI SDK (Whisper) either way.
 - Checker cost control: `MAX_CHECKED_FLAGS` (default 20, open flags processed severity-first;
-  anything over the cap is marked `unchecked`, never silently dropped), `CHECKER_FRAME_INTERVAL_S`
-  / `CHECKER_MAX_FRAMES_PER_FLAG` (dense per-flag sampling), `CHECKER_MAX_OCR_FRAMES` (Sarvam OCR
-  batch cap). The Checker is the dominant cost stage by a wide margin (per-flag vision calls run
-  ~$0.04-0.06 vs ~$0.006-0.008 for the Writer's or Reviewer's entire whole-transcript call) --
-  `MAX_CHECKED_FLAGS` has never actually bound on any real run so far, see
-  `../docs/18-known-gaps-v2.md`.
+  anything over the cap is marked `unchecked`, never silently dropped). The old frame-based Checker
+  path (up to 16 frames per flag, ~$0.04-0.06 per flag) was removed; the Checker now works from
+  screen events and the whole run costs roughly $0.13-0.54.
 - Every LLM call site follows the same pattern: try -> on failure, `Metrics.record_failure(stage,
   meta)` -> a defined degradation (see the Writer/Reviewer/Checker summaries above) -- no single
   bad call fails the whole run except the Writer's.

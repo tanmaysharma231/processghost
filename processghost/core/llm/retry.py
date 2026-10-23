@@ -54,7 +54,7 @@ def is_transient(exc: BaseException) -> bool:
         return False
     if isinstance(exc, _TRANSIENT):
         return True
-    status = getattr(exc, "status_code", None)  # SDKs that do not subclass the openai errors (e.g. Sarvam)
+    status = getattr(exc, "status_code", None)  # SDKs that do not subclass the openai errors
     return isinstance(status, int) and (status == 429 or status >= 500)
 
 

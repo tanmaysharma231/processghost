@@ -158,13 +158,6 @@ def test_two_unresolvable_calls_stop_at_two(tmp_path):
     assert doc.flags[0].status == "unresolvable" and doc.flags[0].expansion_level == 1
 
 
-def test_sarvam_level1_stays_text_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "LLM_PROVIDER", "sarvam")
-    client, doc = _run(tmp_path, [_out("unresolvable", reason="no"), _out("resolved")])
-    assert client.structured_calls[1][3] is None
-    assert doc.flags[0].checker_tier == "ocr"
-
-
 def test_echoed_observation_is_downgraded_then_escalated(tmp_path):
     echo = _out("resolved", observed="Where does it go? Paste it here.")
     client, doc = _run(tmp_path, [echo, _out("resolved")])

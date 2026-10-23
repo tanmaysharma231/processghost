@@ -19,9 +19,9 @@ Response = Union[dict, Exception, Callable[..., dict]]
 
 
 class _FakeClient:
-    """Stands in for LLMClient/SarvamClient.
+    """Stands in for LLMClient/AnthropicClient.
 
-    Each of chat_response/vision_response/ocr_response/structured_response may be:
+    Each of chat_response/vision_response/structured_response may be:
     - a plain value (dict) -- returned as-is on every call,
     - an Exception instance -- raised on every call,
     - a callable -- invoked with the call's arguments, its return value or raised exception used,
@@ -30,30 +30,25 @@ class _FakeClient:
       that a single canned response cannot express.
 
     chat_calls / vision_calls record the raw messages passed to each call (list[list[dict]]);
-    ocr_calls records (frame_paths, workdir) tuples; call_order records the call sequence
-    ("chat" / "vision" / "ocr") so tests can assert ordering, e.g. that a batched OCR job runs
-    before any per-flag chat call.
+    call_order records the call sequence ("chat" / "vision" / "structured") so tests can assert
+    ordering.
     """
 
     def __init__(
         self,
         chat_response: Any = None,
         vision_response: Any = None,
-        ocr_response: Any = None,
         structured_response: Any = None,
     ):
         self.metrics = Metrics()
         self._chat_response = chat_response
         self._vision_response = vision_response
-        self._ocr_response = ocr_response
         self._structured_response = structured_response
         self._chat_calls_made = 0
         self._vision_calls_made = 0
-        self._ocr_calls_made = 0
         self._structured_calls_made = 0
         self.chat_calls: List[list] = []
         self.vision_calls: List[list] = []
-        self.ocr_calls: List[tuple] = []
         self.structured_calls: List[tuple] = []
         self.call_order: List[str] = []
 
@@ -81,13 +76,6 @@ class _FakeClient:
         self.call_order.append("vision")
         result = self._resolve(self._vision_response, self._vision_calls_made, messages)
         self._vision_calls_made += 1
-        return result
-
-    def ocr_extract_frames(self, frame_paths, workdir):
-        self.ocr_calls.append((frame_paths, workdir))
-        self.call_order.append("ocr")
-        result = self._resolve(self._ocr_response, self._ocr_calls_made, frame_paths, workdir)
-        self._ocr_calls_made += 1
         return result
 
     def structured_chat(

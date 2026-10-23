@@ -18,7 +18,7 @@ video.mp4
   |  ffmpeg: extract audio
   v
 audio.wav
-  |  STT (OpenAI Whisper, or Sarvam Saaras v3)
+  |  STT (OpenAI Whisper)
   v
 transcript segments [{id, start, end, text}]
   |
@@ -40,15 +40,14 @@ sop_draft.md (after Reviewer), sop.md, sop.json, build_spec.json, trace.jsonl, r
 
 Orchestrator: `core/pipeline.py: run_pipeline`. Every LLM stage goes through
 `structured_chat(system_prompt, user_text, schema, ...)`, which validates the reply against a
-Pydantic schema (`core/models/sop.py`). Both providers (OpenAI via LangChain, Sarvam via
-JSON-mode-by-prompt) expose that same interface, so no stage branches on provider at the call site
-except where the Checker needs vision vs OCR.
+Pydantic schema (`core/models/sop.py`). Both providers (OpenAI and Anthropic, each via
+LangChain) expose that same interface, so no stage branches on provider at the call site.
 
 ## Stage 0 - Transcription (not an agent)
 
 - In: `audio.wav` extracted from the video.
 - Out: `segments_raw`, a list of `{id, start, end, text}`.
-- Provider: Whisper (`whisper-1`) or Sarvam Saaras v3. Priced per minute of audio.
+- Provider: Whisper (`whisper-1`). Priced per minute of audio.
 - Degraded case: if STT returns one whole-transcript segment with no timing, the run records
   `stt_timing_degraded` and sets `timing_degraded` on the document so the output says its
   timestamps are unreliable instead of showing fake `@0:00` attributions.
@@ -65,7 +64,7 @@ except where the Checker needs vision vs OCR.
   attribution (`build_sop_from_writer_output`, `core/llm/parsing.py`).
 - **Failure:** FATAL. Any failure raises `WriterFailedError` and aborts the run, because there is no
   document to fall back to. The failure is recorded on the run's metrics first.
-- **Model:** `config.MODEL_TEXT` (gpt-4o) or `sarvam-105b`.
+- **Model:** `config.MODEL_TEXT` (gpt-4o).
 
 ## Stage 2 - Reviewer
 
@@ -91,15 +90,13 @@ except where the Checker needs vision vs OCR.
 - **Job:** resolve ONE flag against what was actually on screen.
 - **Selection:** open flags sorted blocking-first; the first `MAX_CHECKED_FLAGS` (20) are checked,
   the rest are marked `unchecked` (never silently dropped).
-- **Evidence per flag:** frames extracted from the flag's time window
-  (`extract_frames_window`: window from the flag's segments, `CHECKER_LEAD_IN_S` lead-in,
-  `CHECKER_MIN_WINDOW_S` minimum, one frame per `CHECKER_FRAME_INTERVAL_S`, at most
-  `CHECKER_MAX_FRAMES_PER_FLAG`).
-  - OpenAI path: the frames go to a vision model with the call.
-  - Sarvam path (no vision model): all checked flags' frames are OCR'd in one batched job, then each
-    flag is reasoned over its extracted text.
+- **Evidence per flag:** the screen events attached to the flag (`_check_flag_with_events`). Level 0
+  sends the nearest event as OCR text to a text model; if that is unresolvable, level 1 widens the
+  window and attaches images. A flag with no screen events, or any flag when there is no screen
+  timeline, is marked `unchecked` and no model call is made. (The earlier frame-extraction path,
+  which sent up to 16 frames per flag, was removed on 2026-10-23.)
 - **In (per call):** the flag's question and family, the relevant step excerpt, the transcript
-  excerpt for the window, plus frames or OCR text.
+  excerpt for the window, plus the screen evidence.
 - **Out:** `CheckerOutput`: `observed` (written first), `verdict`, and depending on verdict
   `inferred_text`, `reason`, or `narration_version` / `screen_version`.
 - **Verdicts:**
@@ -109,11 +106,10 @@ except where the Checker needs vision vs OCR.
   - `unresolvable`: a real terminal status meaning the answer lives only in the recorder's head.
 - **Key rule:** write down what is literally legible before deciding, and "unresolvable" is always
   an acceptable answer. A fabricated resolution is worse than an open question.
-- **Failure:** non-fatal per flag. The flag becomes `check_failed` and the run continues. Frame
-  extraction and the OCR batch also fail without aborting the run.
+- **Failure:** non-fatal per flag. The flag becomes `check_failed` and the run continues.
 - **Cost note:** this stage dominates per-run cost (about $0.04-0.06 per flag on OpenAI vision).
   The frame-based approach is under review (see the plan file); treat this stage as provisional.
-- **Model:** `config.MODEL_VISION` (gpt-4o-mini) or `sarvam-105b` over OCR text.
+- **Model:** `config.MODEL_VISION` (gpt-4o-mini) for images, `config.MODEL_TEXT` for text-only.
 
 ## Stage 4 - Triage (no LLM, no prompt)
 

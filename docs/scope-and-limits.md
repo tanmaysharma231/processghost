@@ -40,8 +40,6 @@ What ProcessGhost does not do, and which of those limits are deliberate choices 
   (switching sheets and copying a cell, on the real clip).
 - **Eval labels are drafts.** They were read off the detector's own keyframes, so a perfect score
   against them proves nothing about recall. A person has to watch the video and confirm them.
-- **Sarvam path unverified.** The Sarvam provider (speech-to-text, OCR, chat) has never been run
-  against the real API in this project.
 - **Cost figures are token estimates** from a price table sourced on 2026-08-29.
 
 ## What would change these
