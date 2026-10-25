@@ -1,0 +1,25 @@
+{
+  "video": "../../../../data/test2.mkv",
+  "note": "DRAFT surface labels, one per event label in expected_events.json (L1..L19, same times). Read from the name box and sheet tabs in the frames (1 fps), not from the detector, but not yet confirmed. Only fields listed under expect are scored. Sheet index: 1 = Invoices, 2 = Purchase Orders, 3 = Exception Log. 'location' is the sheet name without spaces. Focus is left out where the name box shows a range (L13) or was not readable.",
+  "events": [
+    {"label_id": "L1", "t_start": 8.5, "t_end": 9.5, "confirmed": false, "expect": {"index": 1, "focus": "B3"}},
+    {"label_id": "L2", "t_start": 10.5, "t_end": 11.5, "confirmed": false, "expect": {"index": 1, "focus": "E3"}},
+    {"label_id": "L3", "t_start": 12.0, "t_end": 13.0, "confirmed": false, "expect": {"change": "sheet_switch", "index": 2, "location": "PurchaseOrders", "focus": "A1"}},
+    {"label_id": "L4", "t_start": 13.5, "t_end": 14.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 2, "focus": "A3"}},
+    {"label_id": "L5", "t_start": 14.5, "t_end": 15.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 2, "focus": "D3"}},
+    {"label_id": "L6", "t_start": 16.0, "t_end": 17.0, "confirmed": false, "expect": {"change": "sheet_switch", "index": 3, "location": "ExceptionLog", "focus": "A1"}},
+    {"label_id": "L7", "t_start": 18.5, "t_end": 20.5, "confirmed": false, "expect": {"index": 3}},
+    {"label_id": "L8", "t_start": 21.5, "t_end": 22.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 3, "focus": "G2"}},
+    {"label_id": "L9", "t_start": 24.5, "t_end": 25.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 3, "focus": "I2"}},
+    {"label_id": "L10", "t_start": 26.5, "t_end": 27.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 3, "focus": "I2"}},
+    {"label_id": "L11", "t_start": 27.5, "t_end": 28.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 3, "focus": "J2"}},
+    {"label_id": "L12", "t_start": 28.5, "t_end": 30.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 3, "focus": "J2"}},
+    {"label_id": "L13", "t_start": 30.5, "t_end": 31.5, "confirmed": false, "expect": {"index": 3}},
+    {"label_id": "L14", "t_start": 31.5, "t_end": 32.5, "confirmed": false, "expect": {"index": 3, "focus": "H7"}},
+    {"label_id": "L15", "t_start": 32.5, "t_end": 33.5, "confirmed": false, "expect": {"change": "sheet_switch", "index": 2, "location": "PurchaseOrders", "focus": "D3"}},
+    {"label_id": "L16", "t_start": 33.5, "t_end": 34.5, "confirmed": false, "expect": {"change": "sheet_switch", "index": 1, "location": "Invoices", "focus": "E3"}},
+    {"label_id": "L17", "t_start": 34.5, "t_end": 35.5, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 1, "focus": "H3"}},
+    {"label_id": "L18", "t_start": 35.5, "t_end": 36.5, "confirmed": false, "expect": {"index": 1}},
+    {"label_id": "L19", "t_start": 37.0, "t_end": 38.0, "confirmed": false, "expect": {"change": "same_surface_edit", "index": 1, "focus": "H3"}}
+  ]
+}

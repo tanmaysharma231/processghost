@@ -1,0 +1,121 @@
+{
+  "source": "DRAFT true process for data/test2.mkv, written on 2026-10-24 from the frames and the transcript, with the design notes in data/temp_info_test2.md (which describe a different script from the one actually recorded: see 'deviations'). Nothing here is confirmed by the owner yet.",
+  "goal": "A process flow in which every real step appears, and every point where a step is probably missing is marked as a gap. A step counts as present when a flow node or gap node names it; the patterns are scenario facts and live only in evals.",
+  "how_to_score": "Each step passes if ANY group passes; a group passes if EVERY pattern matches within one line of the flow output (case-insensitive). A hit shows the step is mentioned, not that it is right: read the matching lines. Steps with type 'noise' are the reverse: the flow must NOT contain a step for them.",
+  "deviations": [
+    "The recording never mentions INV-108 or automatic acceptance in speech. The auto-accept path is only on screen: Invoices column J note 'Automatically accepted during matching' on INV-108, and Exception Log EXC-108 with Decision 'Accepted' and Approved By 'System (automated)'.",
+    "The speaker says 'let's just approve it to show the process': the approval is a demonstration, so no real acceptance criterion is ever given or implied.",
+    "The name typed in Approved By is 'abcd', a placeholder; the speaker says 'we have to add our name'.",
+    "'102' is spoken as one number but is the suffix of three different ids (INV-102, PO-102, EXC-102); the speaker never says which sheet's id it is."
+  ],
+  "parameters": {
+    "record": "The invoice being reconciled. In the recording it is INV-102 / PO-102 / EXC-102, so no step may hard-code it.",
+    "record_key": "PO Number links an invoice to its purchase order (Invoices column B, Purchase Orders column A); Exception Log carries both Invoice ID (column B) and PO Number (column C). Not stated in the narration: to be confirmed by the owner."
+  },
+  "steps": [
+    {
+      "id": "S1",
+      "order": 1,
+      "name": "Start on the Invoices sheet: the invoices coming in from vendors",
+      "said": true, "shown": true, "confirmed": false,
+      "groups": [["invoices"]]
+    },
+    {
+      "id": "S2",
+      "order": 2,
+      "name": "Pick an invoice and take its PO Number (Invoices column B)",
+      "said": "partly", "shown": true, "confirmed": false,
+      "note": "Said only as 'if you take 102'. Shown by selecting B3.",
+      "groups": [["po number|column\\s*B\\b|\\bB3\\b", "invoice|select|take|pick"]]
+    },
+    {
+      "id": "S3",
+      "order": 3,
+      "name": "Note the invoice amount (Invoices column E)",
+      "said": true, "shown": true, "confirmed": false,
+      "groups": [["invoice amount|52,?000|52k|column\\s*E\\b|\\bE3\\b"]]
+    },
+    {
+      "id": "S4",
+      "order": 4,
+      "name": "On Purchase Orders, find the row for the same PO Number and read its PO Amount (column D)",
+      "said": "partly", "shown": true, "confirmed": false,
+      "note": "How the PO row is found is never said; A3 is selected, then D3.",
+      "groups": [["purchase orders", "po amount|50,?000|column\\s*D\\b|\\bD3\\b|find|match|same"]]
+    },
+    {
+      "id": "S5",
+      "order": 5,
+      "name": "The amounts differ, so an exception is created on the Exception Log",
+      "said": true, "shown": "partly", "confirmed": false,
+      "note": "Said as 'means an exception gets created because we match these'. Whether the exception is created by the system or by hand is not said or shown.",
+      "groups": [["exception log|exception", "creat|differ|variance|mismatch"]]
+    },
+    {
+      "id": "S6",
+      "order": 6,
+      "name": "On the Exception Log, look at the variance (column G, a formula: Invoice Amount minus PO Amount, =F2-E2)",
+      "said": true, "shown": true, "confirmed": false,
+      "groups": [["variance", "2,?000|column\\s*G\\b|\\bG2\\b|formula"]]
+    },
+    {
+      "id": "S7",
+      "order": 7,
+      "name": "Set Decision (column I) from Pending to Accepted",
+      "said": true, "shown": true, "confirmed": false,
+      "note": "The reason given is 'to show the process'. The criterion that makes a variance acceptable is never given.",
+      "groups": [["decision|column\\s*I\\b|\\bI2\\b", "accept|approv|pending"]]
+    },
+    {
+      "id": "S8",
+      "order": 8,
+      "name": "Enter the approver's name in Approved By (column J)",
+      "said": true, "shown": true, "confirmed": false,
+      "note": "The value typed is 'abcd'. Who may approve, and whether the typed name proves approval, is not said.",
+      "groups": [["approved by|approver|column\\s*J\\b|\\bJ2\\b|abcd", "name|enter|type|add"]]
+    },
+    {
+      "id": "S9",
+      "order": 9,
+      "name": "Go back to Invoices and set the invoice's Status (column H) from Pending Review to Ready for Payment",
+      "said": "partly", "shown": true, "confirmed": false,
+      "note": "Said as 'we go back here ... and then we are ready for the payment'.",
+      "groups": [["ready for payment", "status|column\\s*H\\b|\\bH3\\b|invoice"]]
+    },
+    {
+      "id": "S10",
+      "order": 10,
+      "name": "Rule, not a step in the narration: some exceptions are accepted automatically by the system (Approved By 'System (automated)')",
+      "said": false, "shown": "partly", "confirmed": false,
+      "type": "rule", "in_video": "screen only",
+      "note": "On screen at 16s+ as EXC-108 and in the Invoices Notes column; the cursor rests on the EXC-108 row at about 19-20s (L7) but nothing is said. What decides auto versus manual is not stated: the flow should say 'some are automatic, reason unknown' and ask the end user, never state a reason.",
+      "groups": [["automat|system", "accept|approv"]]
+    },
+    {
+      "id": "S11",
+      "order": 11,
+      "name": "Constraint, not an action: Variance is a formula (=F-E); it must not be overwritten",
+      "said": false, "shown": "partly", "confirmed": false,
+      "type": "constraint",
+      "note": "The formula is visible in the formula bar when G2 is selected.",
+      "groups": [["variance", "formula|calculat|overwrit|do not"]]
+    },
+    {
+      "id": "S12",
+      "order": 12,
+      "name": "Repeat for every other exception awaiting a decision",
+      "said": false, "shown": false, "confirmed": false,
+      "implied": true,
+      "note": "Not said. The Exception Log shows 22 other exceptions, many Pending or Under Review.",
+      "groups": [["repeat|each|every|other (exceptions|invoices)|remaining|rest of the|loop"]]
+    },
+    {
+      "id": "N1",
+      "order": 13,
+      "name": "NOT A STEP (noise): the unnarrated clicks at the end -- selecting I10:I11 and H7 on the Exception Log and passing through Purchase Orders on the way back",
+      "type": "noise", "must_not_appear": true, "confirmed": false,
+      "note": "Owner: extra clicks added at the end as distractors. The flow must not contain a step for any of them. Which clicks count is my reading (L13-L15): the owner confirms.",
+      "groups": [["I10|I11|H7|Under Review|returned to buyer"]]
+    }
+  ]
+}

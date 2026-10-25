@@ -1,0 +1,29 @@
+{
+  "video": "../../../../data/test2.mkv",
+  "note": "DRAFT event-class labels, one per label in expected_events.json (L1..L19, same times). Classes: transient, view_only, selection, navigation, data_change, unclear. Written from the frames, so they are independent of the detector but NOT yet confirmed by the owner. The hard rule scored here is that no data_change label is ever classified as a dropped class (transient, view_only). L10, L12 and L19 are the three data changes.",
+  "events": [
+    {"label_id": "L1", "t_start": 8.5, "t_end": 9.5, "class": "selection", "confirmed": false},
+    {"label_id": "L2", "t_start": 10.5, "t_end": 11.5, "class": "selection", "confirmed": false},
+    {"label_id": "L3", "t_start": 12.0, "t_end": 13.0, "class": "navigation", "confirmed": false},
+    {"label_id": "L4", "t_start": 13.5, "t_end": 14.5, "class": "selection", "confirmed": false},
+    {"label_id": "L5", "t_start": 14.5, "t_end": 15.5, "class": "selection", "confirmed": false},
+    {"label_id": "L6", "t_start": 16.0, "t_end": 17.0, "class": "navigation", "confirmed": false},
+    {"label_id": "L7", "t_start": 18.5, "t_end": 20.5, "class": "view_only", "confirmed": false, "pointer_only": true,
+     "note": "A pointer hover on the auto-accepted row; nothing changes. view_only is the closest class, and the scorer only forbids dropping a data_change, so this label checks that the hover is not turned into a step."},
+    {"label_id": "L8", "t_start": 21.5, "t_end": 22.5, "class": "selection", "confirmed": false},
+    {"label_id": "L9", "t_start": 24.5, "t_end": 25.5, "class": "selection", "confirmed": false},
+    {"label_id": "L10", "t_start": 26.5, "t_end": 27.5, "class": "data_change", "confirmed": false,
+     "note": "Decision Pending -> Accepted, picked from a dropdown."},
+    {"label_id": "L11", "t_start": 27.5, "t_end": 28.5, "class": "selection", "confirmed": false},
+    {"label_id": "L12", "t_start": 28.5, "t_end": 30.5, "class": "data_change", "confirmed": false,
+     "note": "Typed text into an empty cell: the approver field."},
+    {"label_id": "L13", "t_start": 30.5, "t_end": 31.5, "class": "selection", "confirmed": false, "noise": true},
+    {"label_id": "L14", "t_start": 31.5, "t_end": 32.5, "class": "selection", "confirmed": false, "noise": true},
+    {"label_id": "L15", "t_start": 32.5, "t_end": 33.5, "class": "navigation", "confirmed": false, "noise": true},
+    {"label_id": "L16", "t_start": 33.5, "t_end": 34.5, "class": "navigation", "confirmed": false},
+    {"label_id": "L17", "t_start": 34.5, "t_end": 35.5, "class": "selection", "confirmed": false},
+    {"label_id": "L18", "t_start": 35.5, "t_end": 36.5, "class": "selection", "confirmed": false},
+    {"label_id": "L19", "t_start": 37.0, "t_end": 38.0, "class": "data_change", "confirmed": false,
+     "note": "Status Pending Review -> Ready for Payment, picked from a dropdown."}
+  ]
+}

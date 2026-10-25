@@ -1,0 +1,97 @@
+{
+  "source": "DRAFT, written on 2026-10-24 from data/test2_transcript.md, the frames of data/test2.mkv and the design notes in data/temp_info_test2.md. Not yet confirmed by the owner. G6 is raised from the screen only (the speaker never mentions automatic acceptance).",
+  "note": "Each finding passes if ANY group passes (a line matching a finding's optional 'exclude' patterns never counts for it); a group passes if EVERY pattern matches within one line of sop.md (case-insensitive). The patterns are scenario facts, so they live here and never in prompts or pipeline code. A pattern hit is evidence that a finding was surfaced, not proof it was surfaced correctly: read the matching lines. 'forbidden' lists claims that the scenario design says must not be made.",
+  "findings": [
+    {
+      "id": "G1",
+      "name": "'invoices' is the Invoices sheet: incoming vendor invoices, with Status and Notes columns",
+      "groups": [["invoices\\s*(sheet|tab)|sheet\\s*(1|one)|first sheet|\\binvoices\\b.{0,40}(sheet|status|vendor)"]]
+    },
+    {
+      "id": "G2",
+      "name": "'purchase orders' is the Purchase Orders sheet, where the PO Amount is read",
+      "groups": [["purchase\\s*orders"]]
+    },
+    {
+      "id": "G3",
+      "name": "the exception is on the Exception Log sheet, where Decision and Approved By are set",
+      "groups": [["exception\\s*log"]]
+    },
+    {
+      "id": "G4",
+      "name": "an invoice is matched to its PO by PO Number (the selected cell on Invoices, the row on Purchase Orders); '102' is a shared number across INV, PO and EXC ids",
+      "groups": [
+        ["po\\s*number|column\\s*B\\b|\\bB3\\b|\\bA3\\b", "match|link|key|identif|join|same|find|compar|which"],
+        ["\\b102\\b", "which|ambiguous|refers|id|invoice|po-"]
+      ]
+    },
+    {
+      "id": "G5",
+      "name": "the invoice amount (52,000) is compared with the PO amount (50,000); the difference is the variance (2,000)",
+      "groups": [["52,?000|invoice amount", "50,?000|po amount|purchase order amount"]]
+    },
+    {
+      "id": "G6",
+      "name": "some exceptions are accepted automatically (Approved By 'System (automated)' where the others carry a person's name; the cursor rests on EXC-108 at about 19s); nothing says why, so this is a question for the end user, not something to answer",
+      "note": "Owner ground truth: a hidden rule exists. It is deliberately NOT written anywhere in this case, and the pipeline must ask for it, not guess it. Neither the speech nor any click raises this: it can only come from the screen (the pointer, the Notes column on Invoices, the Approved By column) or from the workbook rung (distinct values of Approved By and Decision, and rows with a similar variance that were not auto-accepted).",
+      "groups": [
+        ["automat|system \\(automated\\)|by the system", "accept|approv|rule|criteri|what decides|determin|why|reason"],
+        ["approved by", "system|automat", "why|what|rule|criteri|reason|who|differ"]
+      ]
+    },
+    {
+      "id": "G7",
+      "name": "no criterion is given for why a 2,000 variance can be accepted (threshold, tolerance, policy); 'to show the process' is not a real reason",
+      "groups": [["threshold|tolerance|limit|criteri|policy|rule|justif|basis|why", "variance|2,?000|accept|approv"]]
+    },
+    {
+      "id": "G8",
+      "name": "who may approve is not stated; the name typed in Approved By is a placeholder ('abcd') and does not show who approved",
+      "groups": [
+        ["approved by|approver|authori|who (is|may|can|should)", "name|who|authori|approv"],
+        ["abcd"]
+      ]
+    },
+    {
+      "id": "G9",
+      "name": "whether Accepted alone makes the invoice Ready for Payment (or something else must happen, and who sets the status) is not stated",
+      "groups": [["ready for payment", "accept|exception|condition|depend|require|automatic|after|before|who|trigger|follow"]]
+    },
+    {
+      "id": "G10",
+      "name": "Variance is a formula (Invoice Amount minus PO Amount) and must not be overwritten",
+      "groups": [["variance", "formula|calculat|=F2-E2|overwrit|do not|don't|live"]]
+    },
+    {
+      "id": "G11",
+      "name": "the process repeats for the other exceptions awaiting a decision; only one is shown",
+      "groups": [["repeat|each|every|other (exceptions|invoices)|remaining|rest of the|loop|one (exception|invoice)"]]
+    }
+  ],
+  "forbidden": [
+    {
+      "pattern": "(variance|difference)[^.\\n]{0,40}(is|was|are) (unacceptable|wrong|an error|not allowed|invalid)",
+      "why": "design notes: a 2,000 variance is not inherently unacceptable; the finding is that no criterion was explained, not that the decision was wrong"
+    },
+    {
+      "pattern": "automatic(ally)? accept\\w*[^.\\n]{0,40}(is|are|was) (wrong|incorrect|not allowed|a problem|an error)",
+      "why": "design notes: automatically accepting an invoice is not inherently wrong"
+    },
+    {
+      "pattern": "(auto\\w*|system)[^?\\n]{0,60}because[^?\\n]{0,60}(under|below|less than|within|threshold)",
+      "why": "the reason for automatic acceptance is not in the video; stating one as fact (rather than asking) is a guess"
+    },
+    {
+      "pattern": "INV-(?!102\\b|108\\b)\\d{3}",
+      "why": "design notes: the detector must not examine unrelated invoice records; ids other than the two on screen as part of the story (102, 108) only appear if it audited other rows"
+    },
+    {
+      "pattern": "(approved|accepted) by (abcd|M\\. Nair|S\\. Khanna|R\\. Patel)[^.\\n]{0,40}(authori[sz]ed|valid|verified)",
+      "why": "design notes: entering a name does not establish that the person actually approved or was authorised to"
+    }
+  ],
+  "completeness_banners": [
+    "Nothing is missing",
+    "No open questions"
+  ]
+}
