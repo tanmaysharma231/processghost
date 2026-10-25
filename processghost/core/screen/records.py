@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -44,7 +44,7 @@ def _cap(text: str) -> str:
     return text if len(text) <= config.SCREEN_RECORD_MAX_CHARS else text[: config.SCREEN_RECORD_MAX_CHARS]
 
 
-def record_for_event(ev: ScreenEvent, timeline_dir: Path, ocr: OcrFn) -> Optional[ChangeRecord]:
+def record_for_event(ev: ScreenEvent, timeline_dir: Path, ocr: OcrFn, band: Optional[Tuple[int, int]] = None) -> Optional[ChangeRecord]:
     before = cv2.imread(str(timeline_dir / ev.before_frame))
     after = cv2.imread(str(timeline_dir / ev.after_frame))
     if before is None or after is None:
@@ -55,7 +55,7 @@ def record_for_event(ev: ScreenEvent, timeline_dir: Path, ocr: OcrFn) -> Optiona
     )
     boxes = [g.box for g in groups]
     pad = config.SCREEN_RECORD_CROP_PAD_PX
-    chrome_before, chrome_after = _cap(chrome_text(before, ocr)), _cap(chrome_text(after, ocr))
+    chrome_before, chrome_after = _cap(chrome_text(before, ocr, band)), _cap(chrome_text(after, ocr, band))
     surface_before, surface_after = locate(chrome_before), locate(chrome_after)
     return ChangeRecord(
         event_id=ev.event_id,
@@ -77,5 +77,5 @@ def record_for_event(ev: ScreenEvent, timeline_dir: Path, ocr: OcrFn) -> Optiona
 
 def build_change_records(timeline: ScreenTimeline, timeline_dir: Path, ocr: OcrFn) -> List[ChangeRecord]:
     cached = cached_ocr(ocr)
-    records = (record_for_event(ev, timeline_dir, cached) for ev in timeline.events)
+    records = (record_for_event(ev, timeline_dir, cached, timeline.edit_band) for ev in timeline.events)
     return [r for r in records if r is not None]

@@ -60,6 +60,7 @@ class ColumnProfile(BaseModel):
     unique: bool = False  # every plain value in the column is different: a candidate identifier
     samples: List[str] = Field(default_factory=list)
     distinct: List[str] = Field(default_factory=list)  # every distinct value, only when there are few (low cardinality)
+    allowed: List[str] = Field(default_factory=list)  # the options of a dropdown (data validation list) on this column, literal lists only
 
 
 class FormulaPattern(BaseModel):

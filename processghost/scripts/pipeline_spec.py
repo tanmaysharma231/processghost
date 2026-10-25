@@ -163,8 +163,10 @@ STAGES: List[Dict[str, Any]] = [
         "prompts": [],
         "tree": [
             _s("Sample frames at SCREEN_FPS, downscale, grayscale, blur"),
+            _s("Find the formula-bar band once (spreadsheets)", "The row holding the formula-bar glyph, found with local OCR on an early frame. No glyph found: no band, and nothing below changes."),
             _s("Difference against the previous sample, find changed boxes (diff_boxes)", branches=[
                 _b("Changed fraction below SCREEN_ACTIVE_FRAC", "Treat as noise (cursor, compression); not active"),
+                _b("Below it, but the band's text differs from the previous sample's", "Active: a few characters edited in one cell move too few pixels to pass the whole-frame threshold. A small pixel change in the band only decides whether it is read; the reading decides (a moving pointer or a blinking caret changes pixels, not text)"),
                 _b("At or above it", "Active sample"),
             ]),
             _s("Group active samples into events", "A run ends after SCREEN_SETTLE_S of stillness; a burst after a still gap starts a new event."),
@@ -172,7 +174,7 @@ STAGES: List[Dict[str, Any]] = [
                 _b("Flag off (default)", "Changes inside the settle window stay one event"),
                 _b("Flag on", "Split at the jump in where the screen is changing", WARN),
             ]),
-            _s("Keyframes: last still sample before the change, last active sample after it", "Both stored at full resolution."),
+            _s("Keyframes: last still sample before the change, the SETTLED sample after it", "The settled sample is one settle period past the last changed sample, never past the sample before the next event starts, so the final keystrokes of an edit are on it. Both stored at full resolution."),
             _s("Classify the event from the net before/after difference", branches=[
                 _b("After frame is the before frame shifted vertically", "large_shift (a scroll); changes left after undoing the shift are kept as residual boxes, so an edit during a scroll is not hidden"),
                 _b("Changed boxes span at least SCREEN_SCENE_COVERAGE of the frame AND at least SCREEN_SCENE_MIN_CHANGED of pixels changed", "scene_cut (a context switch); OCR the top and bottom strips as its label"),
@@ -181,7 +183,7 @@ STAGES: List[Dict[str, Any]] = [
             ]),
         ],
         "failure": "Non-fatal. On failure the run records screen_failed and continues as v2: no silent-step flags, no event evidence.",
-        "knobs": ["SCREEN_FPS", "SCREEN_ACTIVE_FRAC", "SCREEN_PIXEL_THRESH", "SCREEN_MIN_BOX_AREA", "SCREEN_SETTLE_S", "SCREEN_SCENE_COVERAGE", "SCREEN_SCENE_MIN_CHANGED", "SCREEN_SCROLL_MIN_SHIFT_PX", "SCREEN_SCROLL_MIN_RESPONSE", "SCREEN_SPLIT_ON_LOCUS_SHIFT", "SCREEN_LOCUS_MARGIN_PX"],
+        "knobs": ["SCREEN_FPS", "SCREEN_ACTIVE_FRAC", "SCREEN_PIXEL_THRESH", "SCREEN_MIN_BOX_AREA", "SCREEN_SETTLE_S", "SCREEN_SCENE_COVERAGE", "SCREEN_SCENE_MIN_CHANGED", "SCREEN_SCROLL_MIN_SHIFT_PX", "SCREEN_SCROLL_MIN_RESPONSE", "SCREEN_SPLIT_ON_LOCUS_SHIFT", "SCREEN_LOCUS_MARGIN_PX", "SCREEN_BAND_SEARCH_PCT", "SCREEN_BAND_PAD_PX", "SCREEN_BAND_PREFILTER_FRAC", "SCREEN_BAND_MAX_OCR", "SCREEN_BAND_SEARCH_SAMPLES"],
         "measured": [
             "Found 7 events on the real 24 s clip, matching the draft labels (the labels were read off the same frames, so this proves little about recall).",
             "A spreadsheet sheet switch changed only about 10.8% of pixels, so a 'more than 40% changed' scene-cut rule never fires.",
@@ -366,11 +368,13 @@ STAGES: List[Dict[str, Any]] = [
         "short": "Checks the workbook is the one in the recording, then answers what code can (which cell was used, what reads it, how rows are matched) and lets a short model loop try the rest, read-only. A formula states a rule; the screen only shows values. Every cited cell is checked.",
         "inputs": ["Open and unresolvable flags, and blocking flags the video resolved (a cross-check)", "The workbook, as a copy", "The cell trail: which cell was selected, on which sheet, when (read from the name box)", "Full-frame OCR of each sheet, for the match check"],
         "outputs": ["workbook_profile.json: sheets, headers, columns (with uniqueness), formulas as written, layout quirks", "cell_trail.json and workbook_match.json (match, partial, mismatch or unknown, with the reasons)", "Per flag: what the document rung did (answered, contradicted, candidates, no answer, skipped) with the cells it rests on", "New flags for conflicts the data revealed, left for the person who recorded the process"],
-        "model": "MODEL_TEXT, a short loop of structured calls per flag; the profiler and the two lookup tools are plain code",
-        "prompts": ["DATA_CHECKER_SYSTEM"],
+        "model": "MODEL_TEXT, a short loop of structured calls per flag, plus ONE call for the 'other paths' questions; the profiler, the facts table and the two lookup tools are plain code",
+        "prompts": ["DATA_CHECKER_SYSTEM", "WONDER_SYSTEM", "VERIFY_READ_SYSTEM"],
         "tree": [
-            _s("Check the workbook against the recording (no model)", branches=[
-                _b("Sheet count, or the content of a selected cell, disagrees", "mismatch: the workbook is NOT used, the report says so, every routed question is recorded as skipped", STOP),
+            _s("Check the workbook against the recording", branches=[
+                _b("Sheet count disagrees", "mismatch: the workbook is NOT used, the report says so, every routed question is recorded as skipped", STOP),
+                _b("A cell the recording CHANGED differs from the workbook", "Only a note: the file may be saved from before or after the recording. Every reading of the cell, before and after, is compared, not the first"),
+                _b("A cell the recording did NOT change differs", "One batched second look at the cropped formula-bar row: the cheap vision model chooses between the reading, the workbook's value and neither/empty, and a choice of the workbook counts only if local OCR of the crop also shows its text. Pixels back the workbook: noted. Pixels back the reading: mismatch. Unclear or not confirmed: it stays against the workbook", STOP),
                 _b("Only some words visible in the recording are not in the workbook", "partial: used, with a warning that answers are not verified against the recording", WARN),
                 _b("Everything comparable agrees", "match"),
                 _b("Nothing from the recording to compare", "unknown: stated in the report, never treated as a pass", WARN),
@@ -388,6 +392,13 @@ STAGES: List[Dict[str, Any]] = [
                 _b("A step that is a result (something that happens by itself)", "Drawn as a result node off the action that causes it, with the formulas that produce it"),
             ]),
             _s("Find 'one shown, many needed' (no model)", "The range a formula reads that holds the changed cell, or the run of cells waiting for the same entry, says how many items the process covers; the recording changed one. Raised as a question for the person (\"1 of the 8 cells in F18:F25 changed; is it repeated for the remaining 7?\"), never added as a step. Needs a workbook."),
+            _s("Wonder about the other paths: facts in code, one model call, a guard in code", branches=[
+                _b("Facts table (no model)", "For the cells the recording changed or selected: the column's values with counts, its dropdown options (literal lists), the other columns of the same rows grouped by the changed one, ranges per group (a simple row formula such as =F-E is computed from the file), and how many formulas read the cell. Numbered F1, F2; capped; no row ids or raw rows"),
+                _b("One call over the steps and the facts", "Notices that a recorded step sets one value out of several, or that rows in the same state are handled differently, and asks what decides it. It may only ask: never state a rule, threshold or reason"),
+                _b("A question cites no real fact, or has a number or quoted value that is not in the facts it cites", "Dropped and counted in the trace (wonder_guard)", WARN),
+                _b("A question states a reason, or is not a question, or was already asked", "Dropped", WARN),
+                _b("Kept", "A flag for the person who recorded the process, with the facts and cells it rests on; never answered by a model"),
+            ]),
             _s("Profile the workbook (no model)", "Sheets, the header row (not assumed to be row 1), column kinds, samples and distinct values for low-cardinality columns, formulas collapsed per column plus one-off formula cells in full, merged ranges, empty columns, blank rows, header names shared across sheets. Facts only; it says whether the file has calculated values at all."),
             _s("Route flags", branches=[
                 _b("Not answered by the video (open, unresolvable, unchecked, check failed)", "Send, rule and key questions first"),
@@ -413,7 +424,7 @@ STAGES: List[Dict[str, Any]] = [
             ]),
         ],
         "failure": "Non-fatal. A failed stage records document_failed; a failed question is skipped with the reason on the flag. The source workbook's hash is checked again at the end.",
-        "knobs": ["DATA_ROW_CAP", "DATA_MAX_ROUTED_FLAGS", "DATA_CELL_MAX_CHARS", "DATA_DISTINCT_MAX", "DATA_MAX_CALLS_PER_FLAG", "DATA_MAX_ROUTED_FLAGS", "DATA_PASS_BUDGET_USD", "DATA_MAX_WORKBOOK_BYTES"],
+        "knobs": ["DATA_ROW_CAP", "DATA_MAX_ROUTED_FLAGS", "DATA_CELL_MAX_CHARS", "DATA_DISTINCT_MAX", "DATA_MAX_CALLS_PER_FLAG", "DATA_MAX_ROUTED_FLAGS", "DATA_PASS_BUDGET_USD", "DATA_MAX_WORKBOOK_BYTES", "WONDER_MAX_CELLS", "WONDER_MAX_FACTS", "WONDER_MAX_COMPANIONS", "WONDER_MAX_VALUES_SHOWN", "WONDER_MAX_QUESTIONS"],
         "measured": [
             "Profiler and tools run on the real workbook with no model: they return the formula that states the rule for the total, and they show that no row holds the value that formula needs.",
             "First real run (before the facts, guard and match check existed): 30 model calls for 18 questions, $0.54; the key question was never answered, one answer cited the wrong month's row, and the Checker mixed the billed total with the actualized total.",

@@ -233,6 +233,28 @@
       "title": "Scenes",
       "type": "array"
     },
+    "edit_band": {
+      "anyOf": [
+        {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Edit Band"
+    },
     "activity": {
       "items": {
         "maxItems": 3,

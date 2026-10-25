@@ -193,15 +193,17 @@ Pixels only, no model: turns the video into discrete change events with before a
 **Decision tree**
 
 1. Sample frames at SCREEN_FPS, downscale, grayscale, blur
-2. Difference against the previous sample, find changed boxes (diff_boxes)
+2. Find the formula-bar band once (spreadsheets) _The row holding the formula-bar glyph, found with local OCR on an early frame. No glyph found: no band, and nothing below changes._
+3. Difference against the previous sample, find changed boxes (diff_boxes)
    - IF Changed fraction below SCREEN_ACTIVE_FRAC -> Treat as noise (cursor, compression); not active
+   - IF Below it, but the band's text differs from the previous sample's -> Active: a few characters edited in one cell move too few pixels to pass the whole-frame threshold. A small pixel change in the band only decides whether it is read; the reading decides (a moving pointer or a blinking caret changes pixels, not text)
    - IF At or above it -> Active sample
-3. Group active samples into events _A run ends after SCREEN_SETTLE_S of stillness; a burst after a still gap starts a new event._
-4. Optional split (SCREEN_SPLIT_ON_LOCUS_SHIFT, off by default) _After a still sample, a change that does not touch the run's earlier changes starts a new event: two quick actions in different places._
+4. Group active samples into events _A run ends after SCREEN_SETTLE_S of stillness; a burst after a still gap starts a new event._
+5. Optional split (SCREEN_SPLIT_ON_LOCUS_SHIFT, off by default) _After a still sample, a change that does not touch the run's earlier changes starts a new event: two quick actions in different places._
    - IF Flag off (default) -> Changes inside the settle window stay one event
    - IF Flag on -> Split at the jump in where the screen is changing (degrades)
-5. Keyframes: last still sample before the change, last active sample after it _Both stored at full resolution._
-6. Classify the event from the net before/after difference
+6. Keyframes: last still sample before the change, the SETTLED sample after it _The settled sample is one settle period past the last changed sample, never past the sample before the next event starts, so the final keystrokes of an edit are on it. Both stored at full resolution._
+7. Classify the event from the net before/after difference
    - IF After frame is the before frame shifted vertically -> large_shift (a scroll); changes left after undoing the shift are kept as residual boxes, so an edit during a scroll is not hidden
    - IF Changed boxes span at least SCREEN_SCENE_COVERAGE of the frame AND at least SCREEN_SCENE_MIN_CHANGED of pixels changed -> scene_cut (a context switch); OCR the top and bottom strips as its label
    - IF Otherwise -> local (a cell, field or selection changed)
@@ -224,6 +226,11 @@ Pixels only, no model: turns the video into discrete change events with before a
 | `SCREEN_SCROLL_MIN_RESPONSE` | `0.3` |
 | `SCREEN_SPLIT_ON_LOCUS_SHIFT` | `False` |
 | `SCREEN_LOCUS_MARGIN_PX` | `24` |
+| `SCREEN_BAND_SEARCH_PCT` | `0.2` |
+| `SCREEN_BAND_PAD_PX` | `8` |
+| `SCREEN_BAND_PREFILTER_FRAC` | `0.0008` |
+| `SCREEN_BAND_MAX_OCR` | `300` |
+| `SCREEN_BAND_SEARCH_SAMPLES` | `3` |
 
 **Decisions that shaped it:** D1 Treat screen recordings as change points plus screenshots, not general video; D2 Build speech and screen timelines independently, then join on time; D4 Changed region is the primary locator; cursor is a hint; D5 Diff by thresholded pixels and connected components, at 2 to 5 fps; D6 One before/after keyframe pair per event (last static, first settled); D13 Screen stage and Align are non-fatal with fallback to v2 evidence; D15 Every stage works on a short rolling buffer; D17 Precompute the diff index for the whole video; call OCR and VLM only on demand; D19 Pass scene labels (OCR of tab or title per scene) as text for the surrounding window; ADR-0006 Build the screen timeline independently of the transcript; ADR-0010 Changed regions are merged by proximity, never dropped by size
 
@@ -455,15 +462,17 @@ Resolves each open flag against the screen. Writes down what it saw before decid
 
 Checks the workbook is the one in the recording, then answers what code can (which cell was used, what reads it, how rows are matched) and lets a short model loop try the rest, read-only. A formula states a rule; the screen only shows values. Every cited cell is checked.
 
-- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT, a short loop of structured calls per flag; the profiler and the two lookup tools are plain code | Runs only with `--workbook`
+- Kind: LLM + CODE | Status: partial | Model: MODEL_TEXT, a short loop of structured calls per flag, plus ONE call for the 'other paths' questions; the profiler, the facts table and the two lookup tools are plain code | Runs only with `--workbook`
 - Takes in: Open and unresolvable flags, and blocking flags the video resolved (a cross-check); The workbook, as a copy; The cell trail: which cell was selected, on which sheet, when (read from the name box); Full-frame OCR of each sheet, for the match check
 - Produces: workbook_profile.json: sheets, headers, columns (with uniqueness), formulas as written, layout quirks; cell_trail.json and workbook_match.json (match, partial, mismatch or unknown, with the reasons); Per flag: what the document rung did (answered, contradicted, candidates, no answer, skipped) with the cells it rests on; New flags for conflicts the data revealed, left for the person who recorded the process
-- Prompt: `DATA_CHECKER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
+- Prompt: `DATA_CHECKER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer), `WONDER_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer), `VERIFY_READ_SYSTEM` (full text in `docs/21-pipeline-reference.md` and the explorer)
 
 **Decision tree**
 
-1. Check the workbook against the recording (no model)
-   - IF Sheet count, or the content of a selected cell, disagrees -> mismatch: the workbook is NOT used, the report says so, every routed question is recorded as skipped (stops)
+1. Check the workbook against the recording
+   - IF Sheet count disagrees -> mismatch: the workbook is NOT used, the report says so, every routed question is recorded as skipped (stops)
+   - IF A cell the recording CHANGED differs from the workbook -> Only a note: the file may be saved from before or after the recording. Every reading of the cell, before and after, is compared, not the first
+   - IF A cell the recording did NOT change differs -> One batched second look at the cropped formula-bar row: the cheap vision model chooses between the reading, the workbook's value and neither/empty, and a choice of the workbook counts only if local OCR of the crop also shows its text. Pixels back the workbook: noted. Pixels back the reading: mismatch. Unclear or not confirmed: it stays against the workbook (stops)
    - IF Only some words visible in the recording are not in the workbook -> partial: used, with a warning that answers are not verified against the recording (degrades)
    - IF Everything comparable agrees -> match
    - IF Nothing from the recording to compare -> unknown: stated in the report, never treated as a pass (degrades)
@@ -478,21 +487,27 @@ Checks the workbook is the one in the recording, then answers what code can (whi
    - IF A repeating column with no such tie, or a sheet name that merely shares a word -> Not reported (degrades)
    - IF A step that is a result (something that happens by itself) -> Drawn as a result node off the action that causes it, with the formulas that produce it
 5. Find 'one shown, many needed' (no model) _The range a formula reads that holds the changed cell, or the run of cells waiting for the same entry, says how many items the process covers; the recording changed one. Raised as a question for the person ("1 of the 8 cells in F18:F25 changed; is it repeated for the remaining 7?"), never added as a step. Needs a workbook._
-6. Profile the workbook (no model) _Sheets, the header row (not assumed to be row 1), column kinds, samples and distinct values for low-cardinality columns, formulas collapsed per column plus one-off formula cells in full, merged ranges, empty columns, blank rows, header names shared across sheets. Facts only; it says whether the file has calculated values at all._
-7. Route flags
+6. Wonder about the other paths: facts in code, one model call, a guard in code
+   - IF Facts table (no model) -> For the cells the recording changed or selected: the column's values with counts, its dropdown options (literal lists), the other columns of the same rows grouped by the changed one, ranges per group (a simple row formula such as =F-E is computed from the file), and how many formulas read the cell. Numbered F1, F2; capped; no row ids or raw rows
+   - IF One call over the steps and the facts -> Notices that a recorded step sets one value out of several, or that rows in the same state are handled differently, and asks what decides it. It may only ask: never state a rule, threshold or reason
+   - IF A question cites no real fact, or has a number or quoted value that is not in the facts it cites -> Dropped and counted in the trace (wonder_guard) (degrades)
+   - IF A question states a reason, or is not a question, or was already asked -> Dropped (degrades)
+   - IF Kept -> A flag for the person who recorded the process, with the facts and cells it rests on; never answered by a model
+7. Profile the workbook (no model) _Sheets, the header row (not assumed to be row 1), column kinds, samples and distinct values for low-cardinality columns, formulas collapsed per column plus one-off formula cells in full, merged ranges, empty columns, blank rows, header names shared across sheets. Facts only; it says whether the file has calculated values at all._
+8. Route flags
    - IF Not answered by the video (open, unresolvable, unchecked, check failed) -> Send, rule and key questions first
    - IF Resolved by the video but blocking -> Send as a cross-check: the screen can show one value while the real rule differs
    - IF Over DOCUMENT cap (DATA_MAX_ROUTED_FLAGS) -> Recorded as skipped, never dropped (degrades)
    - IF No workbook supplied -> Stage does not run
-8. Per flag: a loop of structured calls, each a lookup or a verdict
+9. Per flag: a loop of structured calls, each a lookup or a verdict
    - IF Lookup (read_rows or query_rows) -> Row-capped, cells truncated, formulas returned as written; a bad sheet, column or operator is an error the model can read and a wasted call
    - IF The same lookup again -> Refused and counted as wasted (degrades)
    - IF DATA_MAX_CALLS_PER_FLAG lookups used -> One more round that can only give a verdict
-9. Check the verdict in code
+10. Check the verdict in code
    - IF answered or contradicted, citing cells a lookup returned -> Keep it; value and formula are copied from the lookup result, not from the model
    - IF A cited cell was never returned -> Dropped; with none left the verdict is downgraded to no answer (degrades)
    - IF candidates -> Kept as possible answers; the question to the person becomes a confirmation
-10. Merge into the document
+11. Merge into the document
    - IF Answered -> The question is resolved (a slot is filled), citing the cells; the base text is never edited
    - IF Contradicted, even a question the video resolved -> Becomes contradicted and blocking; the person decides (degrades)
    - IF Candidates or no answer -> An open question becomes unresolvable: every automated source has been tried
@@ -512,6 +527,11 @@ Checks the workbook is the one in the recording, then answers what code can (whi
 | `DATA_MAX_ROUTED_FLAGS` | `12` |
 | `DATA_PASS_BUDGET_USD` | `0.3` |
 | `DATA_MAX_WORKBOOK_BYTES` | `20971520` |
+| `WONDER_MAX_CELLS` | `12` |
+| `WONDER_MAX_FACTS` | `40` |
+| `WONDER_MAX_COMPANIONS` | `6` |
+| `WONDER_MAX_VALUES_SHOWN` | `8` |
+| `WONDER_MAX_QUESTIONS` | `8` |
 
 **Decisions that shaped it:** X12 Every question climbs a ladder: video, then document, then the person who recorded the process; X13 Every step that moves or edits data must answer four questions: source, key, target, effect; X16 Check that the workbook is the one in the recording before using it; X17 A number in a video claim must belong to a cell that depends on what the recording changed; X18 'One shown, many needed' is found from the workbook and raised as a question; X19 The workbook decides which values are parameters; the real names stay, with a note about reuse
 

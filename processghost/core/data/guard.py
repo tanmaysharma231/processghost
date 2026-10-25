@@ -11,6 +11,10 @@ person), its inferred clause or inserted step is removed, and the reason names t
 
 Numbers that do not equal any computable formula value are left alone: they may be plain values, and nothing here can tell.
 This guard rejects wrong attributions; it cannot confirm a claim is true.
+
+A second rule covers names and other text: a claim about a column the recording changed must not name ANOTHER value of that
+column in place of what the changed cell was read as (the seen failure: a placeholder was typed into a cell, and the claim
+attributed it to a real name that belongs to a different row). It needs a settled reading of the cell; without one it stays silent.
 """
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ from core.data.tools import WorkbookTools
 from core.models.data import RungAttempt
 from core.models.sop import Resolution, SOPDocument
 from core.screen.cell_trail import TrailCell
+from core.text_grounding import compact
 
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _MIN_DIGITS = 3  # smaller numbers are counts and ordinals ("step 2"), not amounts
@@ -57,6 +62,35 @@ def _violation(text: str, computed: Dict[Tuple[str, str], float], reach: Set[Tup
     return None
 
 
+_MIN_VALUE_CHARS = 3  # a shorter value ("no", "ok") is too likely to be an ordinary word to say a claim names it
+
+
+def _settled_read(trail: List[TrailCell], sheet: str, cell: str) -> str:
+    """What the cell showed last: the latest non-empty formula-bar reading for it."""
+    reads = [t.content for t in sorted(trail, key=lambda t: t.t_s) if (t.sheet, t.cell) == (sheet, cell) and t.content.strip()]
+    return reads[-1].strip() if reads else ""
+
+
+def _names_another_value(text: str, flag_events: Set[str], changed: List[Tuple[str, str]], trail: List[TrailCell], tools: WorkbookTools) -> Optional[str]:
+    """A claim about a column the recording changed must not name ANOTHER value of that column in place of what the changed cell
+    was read as. The seen failure: a placeholder was typed into a cell and the claim attributed it to a real name that belongs to
+    another row of the same column. Applies only when the cell has a settled reading, and never to a claim that also contains it."""
+    by_event = {t.event_id: t for t in trail}
+    claim_cells = {(by_event[e].sheet, re.sub(r"\d+", "", by_event[e].cell)) for e in flag_events if e in by_event and by_event[e].sheet}
+    folded = compact(text)
+    for sheet, ref in changed:
+        letter = re.sub(r"\d+", "", ref)
+        if (sheet, letter) not in claim_cells:
+            continue
+        read = _settled_read(trail, sheet, ref)
+        if not read or compact(read) in folded:
+            continue
+        for value in tools.data_values(sheet, letter):
+            if len(compact(value)) >= _MIN_VALUE_CHARS and compact(value) != compact(read) and compact(value) in folded:
+                return "it names '%s', another value of column %s on %s, but %s was read as '%s'" % (value, letter, sheet, ref, read[:40])
+    return None
+
+
 def guard_claims(doc: SOPDocument, trail: List[TrailCell], tools: WorkbookTools) -> SOPDocument:
     changed = changed_cells(doc, trail)
     if not changed:
@@ -66,10 +100,11 @@ def guard_claims(doc: SOPDocument, trail: List[TrailCell], tools: WorkbookTools)
     reach = facts.reachable_from(deps, changed)
 
     withdrawn: Dict[str, str] = {}
+    events_of = {f.flag_id: set(f.event_ids) for f in doc.flags}
     for res in doc.resolutions:
         if res.verdict != "resolved" or not res.inferred_text:
             continue
-        reason = _violation(res.inferred_text, computed, reach)
+        reason = _violation(res.inferred_text, computed, reach) or _names_another_value(res.inferred_text, events_of.get(res.flag_id, set()), changed, trail, tools)
         if reason:
             withdrawn[res.flag_id] = reason
     if not withdrawn:

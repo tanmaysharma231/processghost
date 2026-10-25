@@ -18,6 +18,7 @@ Event type (see config.py for why changed-pixel fraction alone is not used):
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -28,8 +29,9 @@ from core import config
 from core.io.video import frame_name_for
 from core.models.screen import Box, Scene, ScreenEvent, ScreenTimeline
 from core.screen.diff import diff_boxes, normalize_frame
+from core.screen.edit_band import BandWatch, find_edit_band
 from core.screen.evidence_id import video_fingerprint
-from core.screen.ocr import OcrFn, get_ocr
+from core.screen.ocr import OcrFn, OcrLinesFn, get_ocr, get_ocr_lines
 
 _Sample = Tuple[float, np.ndarray]  # (t_s, BGR frame)
 
@@ -112,11 +114,14 @@ def _touches(boxes: Sequence[Box], earlier: Sequence[Box], margin: int) -> bool:
     return False
 
 
-def chrome_text(frame: np.ndarray, ocr: OcrFn) -> str:
+def chrome_text(frame: np.ndarray, ocr: OcrFn, band: Optional[Tuple[int, int]] = None) -> str:
+    """OCR of the top and bottom strips. With the edit band known (core/screen/edit_band.py) its row is read on its own first,
+    so the name box and formula bar are never cut off by the strip height and come first for the locator."""
     h = frame.shape[0]
     top = frame[: int(h * config.SCREEN_TOP_STRIP_PCT)]
     bottom = frame[int(h * (1.0 - config.SCREEN_BOTTOM_STRIP_PCT)) :]
-    return " | ".join(t for t in (ocr(top), ocr(bottom)) if t)
+    parts = [ocr(frame[band[0] : band[1]])] if band else []
+    return " | ".join(t for t in parts + [ocr(top), ocr(bottom)] if t)
 
 
 def build_screen_timeline(
@@ -126,10 +131,16 @@ def build_screen_timeline(
     fps: float = config.SCREEN_FPS,
     mask_rects: Sequence[Box] = config.SCREEN_MASK_RECTS,
     ocr: Optional[OcrFn] = None,
+    ocr_lines: Optional[OcrLinesFn] = None,
 ) -> ScreenTimeline:
     """Pure function of the video and config (plus `ocr`, default: local RapidOCR if installed).
     Writes full-resolution before/after keyframes to out_dir/keyframes/ and returns the timeline;
-    the caller persists it (see scripts/screen_timeline.py)."""
+    the caller persists it (see scripts/screen_timeline.py).
+
+    `ocr_lines` finds the formula-bar band (core/screen/edit_band.py). It defaults to the local engine only when `ocr` is also
+    the default, so a caller that supplies its own `ocr` (a test) gets no band unless it supplies `ocr_lines` too."""
+    if ocr is None and ocr_lines is None:
+        ocr_lines = get_ocr_lines()
     ocr = ocr if ocr is not None else get_ocr()
     key_dir = out_dir / "keyframes"
     key_dir.mkdir(parents=True, exist_ok=True)
@@ -152,13 +163,19 @@ def build_screen_timeline(
     if len(samples) < 2:
         return timeline
 
-    # Pass 1: per-sample activity (did this sample differ from the previous one?).
+    frames = [frame for _t, frame in samples]
+    band = find_edit_band(frames[: config.SCREEN_BAND_SEARCH_SAMPLES], ocr_lines) if ocr_lines and ocr else None
+    watch = BandWatch(frames, band, ocr) if band else None
+    timeline.edit_band = band
+
+    # Pass 1: per-sample activity (did this sample differ from the previous one?). A sample under the whole-frame threshold
+    # still counts when the formula-bar band's text changed: a few characters edited in one cell move few pixels.
     active: List[bool] = [False]
     fracs: List[float] = [0.0]
     sample_boxes: List[List[Box]] = [[]]
     for i in range(1, len(samples)):
         res = diff_boxes(samples[i - 1][1], samples[i][1], mask_rects)
-        active.append(res.changed_frac >= config.SCREEN_ACTIVE_FRAC)
+        active.append(res.changed_frac >= config.SCREEN_ACTIVE_FRAC or (watch is not None and watch.changed(i)))
         fracs.append(res.changed_frac)
         sample_boxes.append(res.boxes)
         timeline.activity.append((round(samples[i][0], 3), round(res.changed_frac, 5), len(res.boxes)))
@@ -194,9 +211,15 @@ def build_screen_timeline(
     if start is not None:
         runs.append((start, last_active))
 
+    settle_n = int(math.ceil(config.SCREEN_SETTLE_S * fps))
     for n, (first, last) in enumerate(runs, start=1):
         t_before, before = samples[first - 1]
-        t_after, after = samples[last]
+        # `after` is the SETTLED frame: the one a settle period past the last changed sample (so the last keystrokes of an edit
+        # that moved too few pixels to count are on it), but never past the sample before the next event starts.
+        next_first = runs[n][0] if n < len(runs) else len(samples)
+        settled = max(last, min(last + settle_n, next_first - 1, len(samples) - 1))
+        t_after, after = samples[settled]
+        t_last = samples[last][0]
         net = diff_boxes(before, after, mask_rects)
         coverage = _bbox_coverage(net.boxes, width, height)
         shift = _scroll_shift(before, after, net.changed_frac)
@@ -226,7 +249,7 @@ def build_screen_timeline(
             ScreenEvent(
                 event_id=f"ev-{n:03d}",
                 t_start=round(samples[first][0], 3),
-                t_end=round(t_after, 3),
+                t_end=round(t_last, 3),
                 type=etype,
                 changed_pct=round(net.changed_frac * 100, 3),
                 coverage_pct=round(coverage * 100, 2),

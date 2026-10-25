@@ -69,10 +69,11 @@ from core.screen.slot_fills import fill_slots_from_anchors
 from core.data.answer import deterministic_outcomes, enrich_slots
 from core.data.apply import apply_outcome, attach_attempt, skipped_attempt
 from core.data.checker import check_flag_with_data
-from core.data.guard import guard_claims
+from core.data.guard import changed_cells, guard_claims
 from core.data.match import check_match, frame_texts
 from core.data.params import add_parameters
 from core.data.repeat import add_repeat_questions
+from core.data.wonder import add_wonder_questions
 from core.data.profile import profile_workbook
 from core.data.tools import WorkbookTools
 from core.ladder import record_video_rungs, route_to_document
@@ -85,6 +86,7 @@ from core.screen.investigate import (
     update_status,
 )
 from core.screen.records import build_change_records, cached_ocr
+from core.screen.verify_reads import make_confirm
 from core.screen.speech_clue import attach_speech_clues
 from core.screen.timeline import build_screen_timeline
 from report import sop_render
@@ -556,7 +558,10 @@ def _document_stage(
         # Is this the workbook that was open in the recording? Answers drawn from a different file would be about the wrong file.
         ocr = get_ocr() if records and timeline is not None and contexts else None
         texts = frame_texts(contexts, timeline, run_dir / "screen", cached_ocr(ocr)) if ocr is not None else {}
-        match = check_match(records or [], trail, texts, tools)  # "unknown" when there is nothing from the recording to compare
+        # The workbook may be saved from before or after the recording, so cells the recording changed may hold the other state; any other
+        # disagreement gets a second look at the image before it counts against the workbook. "unknown" when there is nothing to compare.
+        confirm = make_confirm(client, timeline, run_dir / "screen", run_dir / "verify", ocr) if (timeline is not None and ocr is not None) else None
+        match = check_match(records or [], trail, texts, tools, changed=set(changed_cells(doc, trail)), confirm=confirm)
         doc = doc.model_copy(update={"workbook_match": match})
         storage.save_json(match.model_dump(mode="json"), run_dir / "workbook_match.json")
         if match.verdict == "mismatch":
@@ -574,6 +579,8 @@ def _document_stage(
             doc = apply_outcome(doc, flag_id, outcome)
         doc = add_parameters(doc, trail, profile, tools)  # which values probably change each run, and what would break next time
         doc = add_repeat_questions(doc, trail, tools)  # the recording shows one item; the workbook shows how many the process covers
+        if not client.metrics.over_budget():
+            doc = add_wonder_questions(client, doc, trail, profile, tools)  # one call: which other paths do the facts around the touched cells suggest
         observed = [{"sheet": t.sheet, "cell": t.cell, "content": t.content} for t in trail]
         routed, overflow = route_to_document(doc, True)
         for flag in overflow:

@@ -51,6 +51,7 @@ class ScreenTimeline(BaseModel):
     params: Dict[str, float] = Field(default_factory=dict)
     events: List[ScreenEvent] = Field(default_factory=list)
     scenes: List[Scene] = Field(default_factory=list)
+    edit_band: Optional[Tuple[int, int]] = None  # (y0, y1) of the name-box / formula-bar row in original pixels, when found (core/screen/edit_band.py)
     # One (t_s, changed_frac, n_boxes) per sample after the first -- for plotting and tuning only.
     activity: List[Tuple[float, float, int]] = Field(default_factory=list)
 

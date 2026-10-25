@@ -26,6 +26,11 @@ SCENARIO_STRINGS = [
     "AWS",
     "Variance",
     "SUMIFS",
+    "Approved By",  # the second real clip (data/test2.mkv)
+    "System (automated)",
+    "Exception Log",
+    "Ready for Payment",
+    "Purchase Orders",
 ]
 
 def _prompt_names():
@@ -57,6 +62,7 @@ GENERIC_MODULES = [
     "core/slots.py", "core/ladder.py", "core/screen/classify.py", "core/screen/anchors.py", "core/screen/slot_fills.py",
     "core/screen/read_fallback.py", "core/data/profile.py", "core/data/tools.py", "core/data/checker.py", "core/data/apply.py",
     "core/data/params.py", "core/data/repeat.py", "core/data/guard.py", "core/data/match.py", "core/data/facts.py", "core/data/answer.py", "core/screen/cell_trail.py",
+    "core/data/context_facts.py", "core/data/wonder.py", "core/screen/edit_band.py", "core/screen/verify_reads.py",
 ]
 
 

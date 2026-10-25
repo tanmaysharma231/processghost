@@ -159,6 +159,18 @@ class WorkbookTools:
         ws = self._sheet(sheet)
         return ws.max_row if ws is not None else 0
 
+    def data_values(self, sheet: str, letter: str) -> List[str]:
+        """The distinct text values below the header in one column, in first-seen order. Numbers and formulas are left out."""
+        ws = self._sheet(sheet)
+        if ws is None:
+            return []
+        col, first = column_index_from_string(letter.upper()), (self._header_row.get(ws.title) or 0) + 1
+        seen: Dict[str, None] = {}
+        for row, c, cell in self.sheet_cells(ws.title):
+            if c == col and row >= first and cell.formula is None and cell.value and to_number(cell.value) is None:
+                seen.setdefault(cell.value, None)
+        return list(seen)
+
     def formula_cells(self) -> Iterator[Tuple[str, str, str]]:
         """(sheet, ref, formula as written) for every formula cell in the workbook."""
         for ws in self._formulas.worksheets:

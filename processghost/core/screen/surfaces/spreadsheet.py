@@ -8,7 +8,9 @@ import re
 from core.models.screen import Locator
 from core.screen.surfaces.base import SurfaceProfile
 
-_NAME_BOX_FX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,3}\d{1,7})\s*\|?\s*fx\b\s*\|?\s*(.*)", re.I | re.S)
+# The glyph is read as "fx" plus whatever OCR makes of the cancel/accept icons next to it ("fx2.=", "fxX"): up to three
+# non-space, non-separator characters after "fx" are glyph debris, not content.
+_NAME_BOX_FX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{1,3}\d{1,7})\s*\|?\s*[Il1]?fx[^|\s]{0,3}\s*\|?\s*(.*)", re.I | re.S)
 _SHEET_OF = re.compile(r"Sheet\s*(\d+)\s*of\s*(\d+)", re.I)
 _PAGE_STYLE = re.compile(r"PageStyle_(\w+)")
 _SELECTION_SUMMARY = re.compile(r"(?:Sum|Average)\s*[:=]", re.I)

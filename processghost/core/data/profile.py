@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import openpyxl
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.cell import range_boundaries
 
 from core import config
 from core.io.storage import file_sha256
@@ -94,8 +95,29 @@ def _formulas_by_column(ws) -> Tuple[List[FormulaPattern], List[FormulaCell]]:
     return patterns, singles
 
 
+def _dropdown_options(ws) -> Dict[str, List[str]]:
+    """Column letter -> the options of a literal-list dropdown covering that column. A list given as a cell range is left out
+    (its values are not known without following the reference, and a guess would be a fact the file does not state)."""
+    out: Dict[str, List[str]] = {}
+    validations = getattr(getattr(ws, "data_validations", None), "dataValidation", None) or []
+    for dv in validations:
+        formula = (dv.formula1 or "").strip()
+        if dv.type != "list" or not (formula.startswith('"') and formula.endswith('"')):
+            continue
+        options = [clip(o.strip()) for o in formula[1:-1].split(",") if o.strip()]
+        for rng in str(dv.sqref).split():
+            try:
+                min_col, _r1, max_col, _r2 = range_boundaries(rng.replace("$", ""))
+            except ValueError:
+                continue
+            for col in range(min_col or 1, (max_col or min_col or 1) + 1):
+                out.setdefault(get_column_letter(col), options)
+    return out
+
+
 def _profile_sheet(ws) -> SheetProfile:
     rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    dropdowns = _dropdown_options(ws)
     header_row = detect_header_row(rows)
     data_start = header_row if header_row else 0  # rows[data_start:] are the rows after the header
     columns: List[ColumnProfile] = []
@@ -118,7 +140,7 @@ def _profile_sheet(ws) -> SheetProfile:
             ColumnProfile(
                 letter=letter, header=header, kind=_kind(values), non_empty=len(values), samples=samples,
                 distinct_count=len(distinct), unique=bool(plain) and len(distinct) == len(plain),
-                distinct=distinct if plain and low_cardinality else [],
+                distinct=distinct if plain and low_cardinality else [], allowed=dropdowns.get(letter, []),
             )
         )
     patterns, singles = _formulas_by_column(ws)

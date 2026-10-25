@@ -13,6 +13,8 @@ from core.data.checker import CallArgs, CellRef, DataCheckerStep, check_flag_wit
 from core.data.profile import profile_workbook
 from core.data.repeat import add_repeat_questions
 from core.data.tools import Filter, WorkbookTools
+from core.data.wonder import WonderOutput
+from core.llm import prompts
 from core.ladder import record_video_rungs, sme_questions
 from core.models.screen import ChangeRecord, Locator
 from core.models.sop import Attribution, Flag, SlotFill, SOPStep
@@ -242,9 +244,10 @@ def test_the_stage_answers_key_and_effect_with_no_model_call_and_saves_the_trail
     # the trail maps these events: ev-001 -> Source!C2, ev-002 -> Work!E5
     steps = [s.model_copy(update={"slots": {k: v.model_copy(update={"event_ids": ["ev-001", "ev-002"] if k == "source" else ["ev-002"]}) for k, v in s.slots.items()}}) for s in doc.steps]
     doc = doc.model_copy(update={"steps": steps})
-    client = _FakeClient()
+    client = _FakeClient(structured_response=WonderOutput())
     out = pipeline._document_stage(client, tmp_path / "run", doc, tmp_path / "w.xlsx", records)
-    assert client.structured_calls == []  # both questions answered from the file
+    # both questions answered from the file: the only model call is the one "other paths" call (docs/26), never the lookup loop
+    assert [c[0] for c in client.structured_calls] == [prompts.WONDER_SYSTEM]
     assert _flag(out, "effect").status == "resolved" and _flag(out, "key").status == "unresolvable"
     assert (tmp_path / "run" / "cell_trail.json").exists() and any(f.origin == "data" for f in out.flags)
 

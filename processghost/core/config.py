@@ -87,6 +87,13 @@ SCREEN_SPLIT_ON_LOCUS_SHIFT: bool = False
 SCREEN_LOCUS_MARGIN_PX: int = 24  # boxes closer than this (original pixels) count as the same locus
 # (x, y, w, h) rectangles in original pixels that never count as change (meeting thumbnails, clock).
 SCREEN_MASK_RECTS: tuple = ()
+# The name-box / formula-bar band (core/screen/edit_band.py): found once on an early frame, then watched as a second signal so a
+# small text edit that moves too few pixels for SCREEN_ACTIVE_FRAC still becomes an event. Untuned starting guesses.
+SCREEN_BAND_SEARCH_PCT: float = 0.20  # the band is looked for in this top share of the frame
+SCREEN_BAND_PAD_PX: int = 8  # padding (original pixels) above and below the formula-bar glyph's row
+SCREEN_BAND_PREFILTER_FRAC: float = 0.0008  # band pixels changed (share of the band) before its text is read; keeps OCR off idle samples
+SCREEN_BAND_MAX_OCR: int = 300  # band OCR reads per timeline; over this the band signal stops (the whole-frame signal continues)
+SCREEN_BAND_SEARCH_SAMPLES: int = 3  # early samples tried when looking for the band
 
 # --- Align (docs/22 stage 2b) ---
 # Narration usually lags the action (the copy is spoken ~2 s after it happens), so an event counts as
@@ -142,6 +149,14 @@ DATA_ROUTE_NON_SLOT: bool = False  # also send questions that are not one of a d
 DATA_MAX_ROUTED_FLAGS: int = 12  # questions sent to the document rung per run
 DATA_PASS_BUDGET_USD: float = 0.30  # estimated spend on the document rung; the rest are skipped, never silently dropped
 DATA_MAX_WORKBOOK_BYTES: int = 20 * 1024 * 1024
+
+# --- "Other paths" questions: facts table + one model call (docs/26 flow plan). All untuned starting guesses. ---
+WONDER_MAX_CELLS: int = 12  # cells the recording touched that the facts are built around
+WONDER_MAX_FACTS: int = 40  # facts handed to the model per run; over the cap the rest are dropped and counted
+WONDER_MAX_COMPANIONS: int = 6  # other columns cross-tabulated against one touched column
+WONDER_MAX_VALUES_SHOWN: int = 8  # distinct values listed in one fact before "and N more"
+WONDER_MAX_QUESTIONS: int = 8  # questions kept from the one call
+WONDER_STATES_REASON: tuple = ("because", "due to", "so that", "which is why")  # English only for now: a question that states a reason is dropped
 
 # --- Retrieval library inspection budget (ADR 0012). Starting guesses; a cache hit costs nothing. ---
 INSPECT_MAX_IMAGES: int = 12  # full frames, comparisons and keyframes handed out per retriever
